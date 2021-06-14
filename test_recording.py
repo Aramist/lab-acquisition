@@ -2,9 +2,9 @@ from functools import partial
 from os import path
 import time
 
-import nidaqmx as nidaq
-from nidaqmx.constants import READ_ALL_AVAILABLE
-from nidaqmx.constants import AcquisitionType
+#import nidaqmx as nidaq
+#from nidaqmx.constants import READ_ALL_AVAILABLE
+#from nidaqmx.constants import AcquisitionType
 import numpy as np
 import tables
 
@@ -17,14 +17,15 @@ SAMPLE_INTERVAL = int(SAMPLE_RATE * READ_CYCLE_PERIOD)
 
 
 class mic_data_writer():
-    def __init__(self, length, filename_format_func, directory, identity_list, infinite=False):
+    def __init__(self, length, filename_format_func, directory, identity_list, infinite=False, sample_rate=SAMPLE_RATE, num_microphones=NUM_MICROPHONES):
         """Parameters:
             length: the length of each file, in minutes
             filename_format: a string used to determine the filename, with {} in
                 place of the file's index (for long recordings)
             directory: the directory in which the files should be created
         """
-        self.target_num_samples = int(length * 60 * SAMPLE_RATE)
+        self.target_num_samples = int(length * 60 * sample_rate)
+        self.num_microphones = num_microphones
         self.filename_generator = filename_format_func
         self.directory = directory
         self.identity_list = identity_list
@@ -77,7 +78,7 @@ class mic_data_writer():
             self.current_file.root,
             'analog_input',
             float_atom,
-            (NUM_MICROPHONES, 0),
+            (self.num_microphones, 0),
             expectedrows=SAMPLE_INTERVAL)
 
         # Update necessary values
@@ -98,32 +99,33 @@ def read_callback(task_obj,
     return 0
 
 
-with nidaq.Task() as task:
-    name_list = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
-    # The following line allows each file in the sequence to have its own start time in its name
-    #fname_generator = lambda : f'mic_{time.time()}_{{}}.h5'
-    
-    # Create a voltage/microphone channel for every microphone
-    task.ai_channels.add_ai_voltage_chan("dev1/ai1",
-        name_to_assign_to_channel=name_list[0])
-    task.ai_channels.add_ai_voltage_chan("dev1/ai2",
-        name_to_assign_to_channel=name_list[1])
-    
-    # Configure the timing for this task
-    # Samples per channel is set to 1 second's worth of samples to prevent
-    # NI-DAQ from creating a really large buffer for the input
-    task.timing.cfg_samp_clk_timing(
-        rate=SAMPLE_RATE,
-        sample_mode=AcquisitionType.CONTINUOUS,
-        samps_per_chan=SAMPLE_RATE*5)
-    # The *5 grants some extra space to the buffer to avoid a crash if the timing of the retrieval from the buffer is a bit off
-    with mic_data_writer(30, f'mic_{time.time()}_{{}}.h5', 'mic_data', name_list) as data_writer:
-        task.register_every_n_samples_acquired_into_buffer_event(
-            sample_interval=SAMPLE_INTERVAL,
-            callback_method=partial(read_callback, task, data_writer))
+def record():  # TODO: Add parameters to this function
+    with nidaq.Task() as task:
+        name_list = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
+        # The following line allows each file in the sequence to have its own start time in its name
+        #fname_generator = lambda : f'mic_{time.time()}_{{}}.h5'
+        
+        # Create a voltage/microphone channel for every microphone
+        task.ai_channels.add_ai_voltage_chan("dev1/ai1",
+            name_to_assign_to_channel=name_list[0])
+        task.ai_channels.add_ai_voltage_chan("dev1/ai2",
+            name_to_assign_to_channel=name_list[1])
+        
+        # Configure the timing for this task
+        # Samples per channel is set to 1 second's worth of samples to prevent
+        # NI-DAQ from creating a really large buffer for the input
+        task.timing.cfg_samp_clk_timing(
+            rate=SAMPLE_RATE,
+            sample_mode=AcquisitionType.CONTINUOUS,
+            samps_per_chan=SAMPLE_RATE*5)
+        # The *5 grants some extra space to the buffer to avoid a crash if the timing of the retrieval from the buffer is a bit off
+        with mic_data_writer(30, f'mic_{time.time()}_{{}}.h5', 'mic_data', name_list) as data_writer:
+            task.register_every_n_samples_acquired_into_buffer_event(
+                sample_interval=SAMPLE_INTERVAL,
+                callback_method=partial(read_callback, task, data_writer))
 
-        task.start()
+            task.start()
 
-        # Prevent python from interpreting EOF - allows the data acquisition to run
-        time.sleep(60 * 120)
-        task.stop()
+            # Prevent python from interpreting EOF - allows the data acquisition to run
+            time.sleep(60 * 120)
+            task.stop()
