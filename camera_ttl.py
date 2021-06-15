@@ -28,7 +28,7 @@ class CameraTTLTask:
     def __enter__(self):
         return self.counter_task
 
-    def __exit__(self):
+    def __exit__(self, type, value, traceback):
         self.counter_task.close()
 
 
