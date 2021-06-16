@@ -42,13 +42,16 @@ def trial(num_streams):
 def run():
     time_array = np.zeros((16, 1000), dtype=float)
     for i in range(16):
-        time_array[i][:] = np.array(trial(i+1))
-    means = np.mean(time_array, axis=1) * 1000
-    devs = np.std(time_array, axis=1) * 1000
+        time_array[i][:] = np.array(trial(i+1)) * 1000
+    means = np.mean(time_array, axis=1)
+    devs = np.std(time_array, axis=1)
     print(means)
     print(devs)
+    quartiles = np.quantile(time_array, [0.25, 0.50, 0.75], axis=1)
+    median_q1_dist = quartiles[1] - quartiles[0]
+    q3_median_dist = quartiles[2] - quartiles[1]
     x_axis = np.arange(1, 17, 1)
-    plt.errorbar(x_axis, means.flatten(), yerr=devs.flatten(), fmt='bo')
+    plt.errorbar(x_axis, means.flatten(), yerr=[median_q1_dist, q3_median_dist], fmt='bo')
     plt.title('Write Time for 0.5s Acquisition vs # Channels Recorded.')
     plt.xlabel('# Channels Recorded')
     plt.ylabel('Time per write (65k samples, ms)')
