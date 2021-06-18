@@ -2,16 +2,16 @@ from functools import partial
 from os import path
 import time
 
-#import nidaqmx as nidaq
-#from nidaqmx.constants import READ_ALL_AVAILABLE
-#from nidaqmx.constants import AcquisitionType
+import nidaqmx as nidaq
+from nidaqmx.constants import READ_ALL_AVAILABLE
+from nidaqmx.constants import AcquisitionType
 import numpy as np
 import tables
 
 
 # Local constants
 NUM_MICROPHONES = 2
-SAMPLE_RATE = 125000  # kHz
+SAMPLE_RATE = 125000  # Hz
 READ_CYCLE_PERIOD = 0.5  # Amount of time (sec) between each read from the buffer
 SAMPLE_INTERVAL = int(SAMPLE_RATE * READ_CYCLE_PERIOD)
 
@@ -24,6 +24,7 @@ class mic_data_writer():
                 place of the file's index (for long recordings)
             directory: the directory in which the files should be created
         """
+        # TODO: Change filename format, re-add filename format function
         self.target_num_samples = int(length * 60 * sample_rate)
         self.num_microphones = num_microphones
         self.filename_generator = filename_format_func
@@ -73,7 +74,7 @@ class mic_data_writer():
         """
 
         # Create an expandable array for analog input
-        float_atom = tables.Float64Atom()
+        float_atom = tables.Float32Atom()
         self.tables_array = self.current_file.create_earray(
             self.current_file.root,
             'analog_input',
@@ -99,20 +100,37 @@ def read_callback(task_obj,
     return 0
 
 
-def record():  # TODO: Add parameters to this function
+class MicrophoneRecorder:
+    def __init__(self, channels_in_use, microphone_labels, sampling_rate, data_write_frequency, file_length_minutes):
+        self.sampling_rate = sampling_rate
+        self.read_cycle_period = data_write_frequency
+        self.sample_interval = data_write_frequency * sampling_rate
+        self.names = microphone_labels
+        self.ports = [u'Dev1/ai{}'.format(channel) for channel in channels_in_use]
+        self.init_task()
+
+    def init_task(self):
+        self.microphone_task = nidaq.Task()
+
+    def __enter__(self):
+        return self.microphone_task
+
+    def __exit__(self, type, value, traceback):
+        self.microphone_task.close()
+def record():  # TODO: Add parameters to this function (microphone channels, sample rate and other constants, file length)
     with nidaq.Task() as task:
+        port_list = [u'dev1/ai{}'.format(i) for i in range(NUM_MICROPHONES)]
         name_list = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
         # The following line allows each file in the sequence to have its own start time in its name
         #fname_generator = lambda : f'mic_{time.time()}_{{}}.h5'
         
         # Create a voltage/microphone channel for every microphone
-        task.ai_channels.add_ai_voltage_chan("dev1/ai1",
-            name_to_assign_to_channel=name_list[0])
-        task.ai_channels.add_ai_voltage_chan("dev1/ai2",
-            name_to_assign_to_channel=name_list[1])
+        for port, name in zip(port_list, name_list):
+            task.ai_channels.add_ai_voltage_chan(port,
+                name_to_assign_to_channel=name)
         
         # Configure the timing for this task
-        # Samples per channel is set to 1 second's worth of samples to prevent
+        # Samples per channel is set to 5 second's worth of samples to prevent
         # NI-DAQ from creating a really large buffer for the input
         task.timing.cfg_samp_clk_timing(
             rate=SAMPLE_RATE,
