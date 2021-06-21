@@ -24,6 +24,11 @@ class CameraTTLTask:
         # If this is not set to Continuous, only one pulse is generated.
         self.counter_task.timing.cfg_implicit_timing(sample_mode=constants.AcquisitionType.CONTINUOUS)
 
+    def start(self):
+        self.counter_task.start()
+
+    def stop(self):
+        self.counter_task.stop()
 
     def __enter__(self):
         return self.counter_task

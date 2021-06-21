@@ -12,6 +12,7 @@ import camera_ttl
 
 
 FILENAME_DATE_FORMAT = '%Y_%m_%d_%H_%M_%S_%f'
+CALCULATED_FRAMERATE = 29.9998066833
 
 
 def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active):
@@ -28,7 +29,7 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
 
 
 class FLIRCamera:
-    def __init__(self, root_directory, framerate=30, camera_index=0, dimensions=(1280,1024)):
+    def __init__(self, root_directory, framerate=CALCULATED_FRAMERATE, camera_index=0, dimensions=(1280,1024)):
         self.framerate = framerate
         self.camera_index = camera_index
         self.dimensions = dimensions
@@ -42,6 +43,9 @@ class FLIRCamera:
             flir_version.minor,
             flir_version.type,
             flir_version.build))
+
+        # IMPORTANT: Keep a useles reference of spin.System around to prevent PySpin from silently crashing your program
+        self.spin_system = flir_system  # Do not delete this line
 
         camera_list = flir_system.GetCameras()
         if camera_list.GetSize() <= camera_index:
@@ -61,7 +65,7 @@ class FLIRCamera:
         start_time_str = start_time.strftime(FILENAME_DATE_FORMAT)
         if not path.exists(self.base_dir):
             os.mkdir(self.base_dir)
-        self.timestamp_path = path.join(base_dir, '{}_cam{}.npy'.format(start_time_str, self.camera_index))
+        self.timestamp_path = path.join(self.base_dir, '{}_cam{}.npy'.format(start_time_str, self.camera_index))
         # video_directory = path.join(base_directory, start_time_str)
         # if not path.exists(video_directory):
             # os.mkdir(video_directory)
@@ -70,7 +74,7 @@ class FLIRCamera:
 
     def start_capture(self):
         self.video_writer = self.create_video_file()
-        self.camera_task = camera_ttl.CameraTTLTask(framerate)
+        self.camera_task = camera_ttl.CameraTTLTask(self.framerate)
 
         self.camera.BeginAcquisition()
         self.camera_task.start()
@@ -97,7 +101,7 @@ class FLIRCamera:
     def __exit__(self, type, value, traceback):
         try:
             self.end_capture()
-        except Error as e:
+        except Exception as e:
             print(e)
 
 
