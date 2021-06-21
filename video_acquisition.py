@@ -20,9 +20,8 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
         try:
             # Remove timeout to prevent thread from hanging after acquisition is stopped.
             image = camera_obj.GetNextImage(0)
-        except Exception:
-            print('Ending acquisition thread')  # Avoid completely silent errors
-            return  # Likely hung on GetNextImage. Close thread.
+        except Exception:  # PySpin raises an exception when the timeout is reached, so stay silent here
+            continue  # Likely hung on GetNextImage. Close thread.
         timestamp_arr.append(image.GetTimeStamp())
         image_bgr = image.Convert(spin.PixelFormat_BGR8)
         video_writer.write(image_bgr.GetData().reshape((dimensions[1], dimensions[0], 3)))
@@ -96,7 +95,7 @@ class FLIRCamera:
         self.camera_task.close()
         self.video_writer.release()
         del self.camera
-        self.flir_system.ReleaseInstance()
+        self.spin_system.ReleaseInstance()
         np.save(self.timestamp_path, np.array(self.timestamps))
 
     def __enter__(self):
