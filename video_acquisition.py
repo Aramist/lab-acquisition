@@ -15,8 +15,12 @@ FILENAME_DATE_FORMAT = '%Y_%m_%d_%H_%M_%S_%f'
 
 
 def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active):
-    while still_active:
-        image = camera_obj.GetNextImage()
+    while still_active():
+        try:
+            image = camera_obj.GetNextImage()
+        except Exception:
+            print('Ending acquisition thread')  # Avoid completely silent errors
+            return  # Likely hung on GetNextImage. Close thread.
         timestamp_arr.append(image.GetTimeStamp())
         image_bgr = image.Convert(spin.PixelFormat_BGR8)
         video_writer.write(image_bgr.GetData().reshape((dimensions[1], dimensions[0], 3)))
@@ -57,6 +61,7 @@ class FLIRCamera:
         start_time_str = start_time.strftime(FILENAME_DATE_FORMAT)
         if not path.exists(self.base_dir):
             os.mkdir(self.base_dir)
+        self.timestamp_path = path.join(base_dir, '{}_cam{}.npy'.format(start_time_str, self.camera_index))
         # video_directory = path.join(base_directory, start_time_str)
         # if not path.exists(video_directory):
             # os.mkdir(video_directory)
@@ -75,7 +80,8 @@ class FLIRCamera:
         enabled = lambda: self.is_capturing
 
         # Begin separate thread for continued image acquisition:
-        self.acq_thread = Thread(target=image_acquisition_loop, args=(self.camera, self.dimensions, self.video_writer, enabled))
+        self.timestamps = list()
+        self.acq_thread = Thread(target=image_acquisition_loop, args=(self.camera, self.timestamps, self.dimensions, self.video_writer, enabled))
         self.acq_thread.start()
 
     def end_capture(self):
@@ -83,6 +89,7 @@ class FLIRCamera:
         self.camera.EndAcquisition()
         self.camera_task.stop()
         self.video_writer.release()
+        np.save(self.timestamp_path, np.array(self.timestamps))
 
     def __enter__(self):
         return self
