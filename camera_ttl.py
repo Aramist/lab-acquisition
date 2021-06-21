@@ -30,6 +30,9 @@ class CameraTTLTask:
     def stop(self):
         self.counter_task.stop()
 
+    def close(self):
+        self.counter_task.close()
+
     def __enter__(self):
         return self.counter_task
 

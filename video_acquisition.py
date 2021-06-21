@@ -18,7 +18,8 @@ CALCULATED_FRAMERATE = 29.9998066833
 def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active):
     while still_active():
         try:
-            image = camera_obj.GetNextImage()
+            # Remove timeout to prevent thread from hanging after acquisition is stopped.
+            image = camera_obj.GetNextImage(0)
         except Exception:
             print('Ending acquisition thread')  # Avoid completely silent errors
             return  # Likely hung on GetNextImage. Close thread.
@@ -92,7 +93,10 @@ class FLIRCamera:
         self.is_capturing = False
         self.camera.EndAcquisition()
         self.camera_task.stop()
+        self.camera_task.close()
         self.video_writer.release()
+        del self.camera
+        self.flir_system.ReleaseInstance()
         np.save(self.timestamp_path, np.array(self.timestamps))
 
     def __enter__(self):
@@ -100,7 +104,8 @@ class FLIRCamera:
 
     def __exit__(self, type, value, traceback):
         try:
-            self.end_capture()
+            if hasattr(self, 'camera'):
+                self.end_capture()
         except Exception as e:
             print(e)
 

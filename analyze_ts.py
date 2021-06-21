@@ -3,7 +3,7 @@ import numpy as np
 
 ts = np.load('camera_timestamps.npy') * 1e-6  # Multiply by 10e-6 to convert from nanoseconds to milliseconds
 expected = np.linspace(ts[0], ts[0] + 1000/30 * (ts.shape[0] - 1), ts.shape[0])
-diffs = np.diff(ts)  # Returns the time difference between each consecutive time stamp
+diffs = np.diff(ts)  # Returns the time difference between each consecutive timestamp
 mean = np.mean(diffs)
 std = np.std(diffs)
 
