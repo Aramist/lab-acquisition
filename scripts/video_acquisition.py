@@ -29,11 +29,14 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
 
 
 class FLIRCamera:
-    def __init__(self, root_directory, framerate=CALCULATED_FRAMERATE, camera_index=0, dimensions=(1280,1024)):
+    def __init__(self, root_directory, framerate=CALCULATED_FRAMERATE, camera_index=0, dimensions=(1280,1024), counter_port=u'Dev1/ctr0', port_name=u'camera_0'):
         self.framerate = framerate
         self.camera_index = camera_index
         self.dimensions = dimensions
         self.base_dir = root_directory
+
+        self.port = counter_port
+        self.name = port_name
 
         # For documentation/debugging purposes:
         flir_system = spin.System.GetInstance()
@@ -74,7 +77,7 @@ class FLIRCamera:
 
     def start_capture(self):
         self.video_writer = self.create_video_file()
-        self.camera_task = camera_ttl.CameraTTLTask(self.framerate)
+        self.camera_task = camera_ttl.CameraTTLTask(self.framerate, counter_port=self.port, port_name=self.name)
 
         self.camera.BeginAcquisition()
         self.camera_task.start()
@@ -116,6 +119,22 @@ def demo(capture_dir):
         time.sleep(10)
         cam.end_capture()
     print('Done')
+
+
+def demo_2cam(capture_dir):
+    cam0 = FLIRCamera(capture_dir,
+            camera_index=0,
+            counter_port=u'Dev1/ctr0',
+            port_name='camera0')
+    cam1 = FLIRCamera(capture_dir,
+            camera_index=1,
+            counter_port=u'Dev1/ctr1',
+            port_name='camera1')
+    cam0.start_capture()
+    cam1.start_capture()
+    time.sleep(10)
+    cam0.end_capture()
+    cam1.end_capture()
 
 
 if __name__ == '__main__':

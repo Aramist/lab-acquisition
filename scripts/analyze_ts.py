@@ -14,6 +14,7 @@ print('Standard deviation: {} ms'.format(std))
 
 
 # Both plots use 1000/30 - diffs in order to display the error in the time differences.
+"""
 plt.subplot(1, 2, 1)
 plt.title('Inter-frame Time Error vs. Frame #')
 plt.scatter(np.arange(diffs.shape[0]), 1000/30 - diffs, s=1, color='b', label='Time between frames')
@@ -21,8 +22,9 @@ plt.axhline(1000/30 - mean, color='k', linestyle='dashed', linewidth=1, label='M
 plt.xlabel('Frame')
 plt.ylabel('Error in Inter-frame Time Relative to 1/30sec (ms)')
 plt.legend()
+"""
 
-plt.subplot(1, 2, 2)
+# plt.subplot(1, 2, 2)
 plt.title('Distribution of Inter-frame Time Error')
 plt.hist(1000/30 - diffs, bins=40, label='Time between frames')
 plt.axvline(1000/30 - mean, color='k', linestyle='dashed', linewidth=1, label='Mean')
