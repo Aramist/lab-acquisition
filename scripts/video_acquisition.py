@@ -33,7 +33,7 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
 
 
 class FLIRCamera:
-    def __init__(self, root_directory, framerate=CALCULATED_FRAMERATE, camera_index=0, dimensions=(640,512), counter_port=u'Dev1/ctr0', port_name=u'camera_0'):
+    def __init__(self, root_directory, framerate=CALCULATED_FRAMERATE, period_extension=0, camera_index=0, dimensions=(640,512), counter_port=u'Dev1/ctr0', port_name=u'camera_0'):
         self.framerate = framerate
         self.camera_index = camera_index
         self.dimensions = dimensions
@@ -41,6 +41,7 @@ class FLIRCamera:
 
         self.port = counter_port
         self.name = port_name
+        self.period_extension = period_extension
 
         # For documentation/debugging purposes:
         flir_system = spin.System.GetInstance()
@@ -81,7 +82,10 @@ class FLIRCamera:
 
     def start_capture(self):
         self.video_writer = self.create_video_file()
-        self.camera_task = camera_ttl.CameraTTLTask(self.framerate, counter_port=self.port, port_name=self.name)
+        self.camera_task = camera_ttl.CameraTTLTask(self.framerate,
+            period_extension=self.period_extension,
+            counter_port=self.port,
+            port_name=self.name)
 
         self.camera.BeginAcquisition()
         self.camera_task.start()
