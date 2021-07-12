@@ -8,6 +8,9 @@ import numpy as np
 image_dir = 'calibration'
 image_paths = sorted([path.join(image_dir, filename) for filename in os.listdir(image_dir)])
 
+output_dir = 'camera_params/cam1'
+
+# This might need to change if a different checkerboard image is used
 board_size = (7, 9)
 criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
@@ -45,13 +48,8 @@ ret, mtx, dist, r_mat, t_mat = cv2.calibrateCamera(world_points,
         None,
         None)
 
-np.save('rotations_cam0.npy', r_mat)
-np.save('translations_cam0.npy', t_mat)
-np.save('camera_matrix_cam0.npy', mtx)
-np.save('distortions_cam0.npy', dist)
-
-print(r_mat)
-print(t_mat)
-print(mtx)
-print(dist)
+np.save('rotations.npy', r_mat)
+np.save('translations.npy', t_mat)
+np.save('camera_matrix.npy', mtx)
+np.save('distortions.npy', dist)
 
