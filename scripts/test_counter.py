@@ -22,7 +22,7 @@ def callback(task,
 
 
 with ni.Task() as task:
-    task.di_channels.add_di_chan('dev1/P0.0', 'counter_input')
+    task.di_channels.add_di_chan('Dev1/port0/line0', 'counter_input')
     task.timing.cfg_samp_clk_timing(
         rate=SAMPLE_RATE,
         sample_mode=AcquisitionType.CONTINUOUS,
