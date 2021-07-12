@@ -26,7 +26,6 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
 
         image_bgr = image.Convert(spin.PixelFormat_BGR8)
         cv_img = image_bgr.GetData().reshape((dimensions[1], dimensions[0], 3))
-        video_writer[0].write(cv_img)
         if camera_matrix is not None and camera_distortions is not None:
             h, w = cv_img.shape[:2]
             # Here 0.5 is the alpha parameter, which determines how many of the original pixels should be kept in the image
@@ -35,7 +34,7 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
             # x, y, roi_w, roi_h = roi
             # roi_image = cv_img[y:y+roi_h, x:x+roi_h, :]
             # cv_img = np.resize(roi_image, (w, h, 3))
-        video_writer[1].write(cv_img)
+        video_writer.write(cv_img)
         try:
             image.Release()
         except Exception:
@@ -104,10 +103,7 @@ class FLIRCamera:
         # if not path.exists(video_directory):
             # os.mkdir(video_directory)
         video_path = path.join(self.base_dir, '{}_cam{}.avi'.format(start_time_str, self.camera_index))
-        orig_path = path.join(self.base_dir, '{}_orig_cam{}.avi'.format(start_time_str, self.camera_index))
-        writer_orig = cv2.VideoWriter(orig_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions)
-        writer_transformed = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions)
-        return writer_orig, writer_transformed
+        return cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions)
 
     def start_capture(self):
         self.camera_task = camera_ttl.CameraTTLTask(self.framerate,
@@ -136,8 +132,7 @@ class FLIRCamera:
             self.camera.EndAcquisition()
             self.camera_task.stop()
             self.camera_task.close()
-            self.video_writer[0].release()
-            self.video_writer[1].release()
+            self.video_writer.release()
             del self.camera
             self.spin_system.ReleaseInstance()
         except Exception:
@@ -164,7 +159,7 @@ def demo(capture_dir):
             port_name=u'camera1',
             calibration_param_path='camera_params/cam1') as cam:
         cam.start_capture()
-        time.sleep(30)
+        time.sleep(20)
         cam.end_capture()
     print('Done')
 
