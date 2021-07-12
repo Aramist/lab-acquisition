@@ -110,7 +110,6 @@ class FLIRCamera:
         return writer_orig, writer_transformed
 
     def start_capture(self):
-        self.video_writer = self.create_video_file()
         self.camera_task = camera_ttl.CameraTTLTask(self.framerate,
             period_extension=self.period_extension,
             counter_port=self.port,
@@ -124,6 +123,7 @@ class FLIRCamera:
         enabled = lambda: self.is_capturing
 
         # Begin separate thread for continued image acquisition:
+        self.video_writer = self.create_video_file()
         self.timestamps = list()
         self.acq_thread = Thread(
             target=image_acquisition_loop,
