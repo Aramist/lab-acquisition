@@ -106,7 +106,6 @@ class FLIRCamera:
         return cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions)
 
     def start_capture(self):
-        self.video_writer = self.create_video_file()
         self.camera_task = camera_ttl.CameraTTLTask(self.framerate,
             period_extension=self.period_extension,
             counter_port=self.port,
@@ -120,6 +119,7 @@ class FLIRCamera:
         enabled = lambda: self.is_capturing
 
         # Begin separate thread for continued image acquisition:
+        self.video_writer = self.create_video_file()
         self.timestamps = list()
         self.acq_thread = Thread(
             target=image_acquisition_loop,
