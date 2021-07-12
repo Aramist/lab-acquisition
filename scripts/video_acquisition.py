@@ -15,7 +15,7 @@ FILENAME_DATE_FORMAT = '%Y_%m_%d_%H_%M_%S_%f'
 CALCULATED_FRAMERATE = 29.9998066833
 
 
-def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active):
+def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, camera_matrix, camera_distortions):
     while still_active():
         try:
             # Remove timeout to prevent thread from hanging after acquisition is stopped.
@@ -23,8 +23,18 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
         except Exception:  # PySpin raises an exception when the timeout is reached, so stay silent here
             continue  # Likely hung on GetNextImage. Close thread.
         timestamp_arr.append(image.GetTimeStamp())
+
         image_bgr = image.Convert(spin.PixelFormat_BGR8)
-        video_writer.write(image_bgr.GetData().reshape((dimensions[1], dimensions[0], 3)))
+        cv_img = image_bgr.GetData().reshape((dimensions[1], dimensions[0], 3))
+        if camera_matrix is not None and camera_distortions is not None:
+            h, w = cv_img.shape[:2]
+            # Here 0.5 is the alpha parameter, which determines how many of the original pixels should be kept in the image
+            new_mtx, roi = cv2.getOptimalNewCameraMatrix(camera_matrix, camera_distortions, (w,h), 1, (w,h))
+            cv_img = cv2.undistort(cv_img, camera_matrix, camera_distortions, None, new_mtx)
+            # x, y, roi_w, roi_h = roi
+            # roi_image = cv_img[y:y+roi_h, x:x+roi_h, :]
+            # cv_img = np.resize(roi_image, (w, h, 3))
+        video_writer.write(cv_img)
         try:
             image.Release()
         except Exception:
@@ -33,7 +43,7 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
 
 
 class FLIRCamera:
-    def __init__(self, root_directory, framerate=CALCULATED_FRAMERATE, period_extension=0, camera_index=0, dimensions=(640,512), counter_port=u'Dev1/ctr0', port_name=u'camera_0'):
+    def __init__(self, root_directory, framerate=CALCULATED_FRAMERATE, period_extension=0, camera_index=0, dimensions=(640,512), counter_port=u'Dev1/ctr0', port_name=u'camera_0', calibration_param_path=None):
         self.framerate = framerate
         self.camera_index = camera_index
         self.dimensions = dimensions
@@ -42,6 +52,21 @@ class FLIRCamera:
         self.port = counter_port
         self.name = port_name
         self.period_extension = period_extension
+
+        self.cam_mat = None
+        self.dist_vecs = None
+
+        if calibration_param_path:
+            # Load calibration parameters
+            print('Loading calibration parameters for {} from {}'.format(self.name, calibration_param_path))
+            try:
+                cam_mat_path = path.join(calibration_param_path, 'camera_matrix.npy')
+                dist_vec_path = path.join(calibration_param_path, 'distortions.npy')
+                self.cam_mat = np.load(cam_mat_path)
+                self.dist_vecs = np.load(dist_vec_path)
+            except:
+                print('Failed to load calibration parameters for {}'.format(self.name))
+
 
         # For documentation/debugging purposes:
         flir_system = spin.System.GetInstance()
@@ -96,7 +121,9 @@ class FLIRCamera:
 
         # Begin separate thread for continued image acquisition:
         self.timestamps = list()
-        self.acq_thread = Thread(target=image_acquisition_loop, args=(self.camera, self.timestamps, self.dimensions, self.video_writer, enabled))
+        self.acq_thread = Thread(
+            target=image_acquisition_loop,
+            args=(self.camera, self.timestamps, self.dimensions, self.video_writer, enabled, self.cam_mat, self.dist_vecs))
         self.acq_thread.start()
 
     def end_capture(self):
@@ -126,9 +153,13 @@ class FLIRCamera:
 
 def demo(capture_dir):
     print('Running video_acquisition.py demo')
-    with FLIRCamera(capture_dir) as cam:
+    with FLIRCamera(capture_dir,
+            camera_index=1,
+            counter_port=u'Dev1/ctr1',
+            port_name=u'camera1',
+            calibration_param_path='camera_params/cam1') as cam:
         cam.start_capture()
-        time.sleep(60 * 60 * 16)
+        time.sleep(20)
         cam.end_capture()
     print('Done')
 
