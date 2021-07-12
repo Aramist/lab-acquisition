@@ -1,10 +1,11 @@
 import datetime
 import sched
+import time
 
-import feeder
+from scripts import feeder
 
 
-def hourly_datetime_generator(interval=3600, on_the_hour=True):
+def hourly_datetime_generator(interval=3600, on_the_hour=True, stop_dt=None):
     start_time = datetime.datetime.now()
     # The nearest hour prior to the current time
     # The first dt returned by the generator will be this + 1 hour
@@ -16,7 +17,7 @@ def hourly_datetime_generator(interval=3600, on_the_hour=True):
     else:
         next_feeding = start_time
     increment = datetime.timedelta(seconds=interval)
-    while True:
+    while stop_dt is None or next_feeding < stop_dt:
         next_feeding = next_feeding + increment
         yield next_feeding
 
@@ -24,17 +25,22 @@ def hourly_datetime_generator(interval=3600, on_the_hour=True):
 def dispense_food(scheduler, feeder_list, time_generator):
     for feeder in feeder_list:
         feeder.dispense_once()
-    scheduler.enterabs(next(time_generator), 1, dispense_food, (scheduler, feeders, time_gen))
+    try:
+        next_time = next(time_generator)
+        scheduler.enterabs(next_time.timestamp(), 1, dispense_food, (scheduler, feeder_list, time_generator))
+    except StopIteration:
+        return
 
 
-def feed_hourly(dio_ports, interval=3600, on_the_hour=True):
-    feeders = [feeder.Feeder(port, 'feeder_{}'.format(n)) for port,n in enumerate(dio_ports)]
-    time_gen = hourly_datetime_generator(interval, on_the_hour)
-    scheduler = sched.scheduler()
-    scheduler.enterabs(next(time_gen), 1, dispense_food, (scheduler, feeders, time_gen))
+def feed_regularly(dio_ports, interval=3600, on_the_hour=True, stop_dt=None):
+    feeders = [feeder.Feeder(port, 'feeder_{}'.format(n)) for n, port in enumerate(dio_ports)]
+    time_gen = hourly_datetime_generator(interval, on_the_hour, stop_dt)
+    scheduler = sched.scheduler(time.time, time.sleep)
+    scheduler.enterabs(next(time_gen).timestamp(), 1, dispense_food, (scheduler, feeders, time_gen))
+    scheduler.run()
 
 
 if __name__ == '__main__':
-    # Run a demo with shorter feed delays
-    feed_regularly(('Dev1/port0/line7',), interval=5, on_the_hour=False)
+    # Run a demo
+    feed_regularly((u'Dev1/port0/line7',), interval=3600, on_the_hour=True, stop_dt=None)
 

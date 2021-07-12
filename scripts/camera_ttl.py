@@ -42,10 +42,13 @@ class CameraTTLTask:
 
 
 def example():
-    with CameraTTLTask(framerate=30, counter_port=u'Dev1/ctr0', port_name='camera_0') as task:
-        task.start()
-        time.sleep(300)  # Or any other function that blocks the interpreter
-        task.stop()
+    task_a = CameraTTLTask(framerate=30, counter_port=u'Dev1/ctr0', port_name='camera_0')
+    task_b = CameraTTLTask(framerate=30, counter_port=u'Dev1/ctr1', port_name='camera_1')
+    task_a.start()
+    task_b.start()
+    time.sleep(300)  # Or any other function that blocks the interpreter
+    task_a.stop()
+    task_b.stop()
 
 
 if __name__ == '__main__':

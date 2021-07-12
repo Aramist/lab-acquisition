@@ -1,4 +1,5 @@
 from functools import partial
+import os
 from os import path
 import time
 
@@ -10,14 +11,13 @@ import tables
 
 
 # Local constants
-NUM_MICROPHONES = 2
 SAMPLE_RATE = 125000  # Hz
 READ_CYCLE_PERIOD = 0.5  # Amount of time (sec) between each read from the buffer
 SAMPLE_INTERVAL = int(SAMPLE_RATE * READ_CYCLE_PERIOD)
 
 
 class mic_data_writer():
-    def __init__(self, length, filename_format_func, directory, identity_list, infinite=False, sample_rate=SAMPLE_RATE, num_microphones=NUM_MICROPHONES):
+    def __init__(self, length, num_microphones, filename_format_func, directory, identity_list, infinite=False, sample_rate=SAMPLE_RATE):
         """Parameters:
             length: the length of each file, in minutes
             filename_format: a string used to determine the filename, with {} in
@@ -60,7 +60,10 @@ class mic_data_writer():
         if self.current_file is not None:
             self.current_file.close()
 
-        filepath = path.join(self.directory, self.filename_generator.format(self.file_counter))
+        if not path.exists(self.directory):
+        	os.mkdir(self.directory)
+
+        filepath = path.join(self.directory, self.filename_generator().format(self.file_counter))
         self.current_file = tables.open_file(filepath, 'w')
         # Create a small array logging the microphones used in this reading:
         """
@@ -117,12 +120,14 @@ class MicrophoneRecorder:
 
     def __exit__(self, type, value, traceback):
         self.microphone_task.close()
-def record():  # TODO: Add parameters to this function (microphone channels, sample rate and other constants, file length)
+
+
+def record(directory, port_list, name_list, duration):  # TODO: Add parameters to this function (microphone channels, sample rate and other constants, file length)
     with nidaq.Task() as task:
-        port_list = [u'dev1/ai{}'.format(i) for i in range(NUM_MICROPHONES)]
-        name_list = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
+        # port_list = [u'dev1/ai{}'.format(i) for i in range(NUM_MICROPHONES)]
+        # name_list = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
         # The following line allows each file in the sequence to have its own start time in its name
-        #fname_generator = lambda : f'mic_{time.time()}_{{}}.h5'
+        fname_generator = lambda : f'mic_{time.time()}_{{}}.h5'
         
         # Create a voltage/microphone channel for every microphone
         for port, name in zip(port_list, name_list):
@@ -137,7 +142,7 @@ def record():  # TODO: Add parameters to this function (microphone channels, sam
             sample_mode=AcquisitionType.CONTINUOUS,
             samps_per_chan=SAMPLE_RATE*5)
         # The *5 grants some extra space to the buffer to avoid a crash if the timing of the retrieval from the buffer is a bit off
-        with mic_data_writer(30, f'mic_{time.time()}_{{}}.h5', 'mic_data', name_list) as data_writer:
+        with mic_data_writer(30, len(port_list), fname_generator, directory, name_list) as data_writer:
             task.register_every_n_samples_acquired_into_buffer_event(
                 sample_interval=SAMPLE_INTERVAL,
                 callback_method=partial(read_callback, task, data_writer))
@@ -145,5 +150,5 @@ def record():  # TODO: Add parameters to this function (microphone channels, sam
             task.start()
 
             # Prevent python from interpreting EOF - allows the data acquisition to run
-            time.sleep(60 * 120)
+            time.sleep(duration)
             task.stop()
