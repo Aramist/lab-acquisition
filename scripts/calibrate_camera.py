@@ -8,11 +8,17 @@ import numpy as np
 image_dir = 'calibration'
 image_paths = sorted([path.join(image_dir, filename) for filename in os.listdir(image_dir)])
 
-output_dir = 'camera_params/cam1'
+output_dir = 'camera_params/cam_a'
+if not path.exists(output_dir):
+    os.mkdir(output_dir)
 
 # This might need to change if a different checkerboard image is used
 board_size = (7, 9)
 criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+cal_flags = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC \
+            + cv2.fisheye.CALIB_FIX_SKEW
+            # + cv2.fisheye.CALIB_CHECK_COND \
+
 
 # Lists to hold the locations of checkerboard corners in the world and in the image
 world_points = list()
@@ -36,20 +42,33 @@ for image_path in image_paths:
         world_points.append(world_frame)
         corners_refined = cv2.cornerSubPix(gray,
                 corners,
-                (11, 11),
+                (5, 5),
                 (-1, -1),
                 criteria)
         image_points.append(corners_refined)
 
 
-ret, mtx, dist, r_mat, t_mat = cv2.calibrateCamera(world_points,
-        image_points,
-        gray.shape[::-1],
-        None,
-        None)
+k_matrix = np.zeros((3, 3))
+d_matrix = np.zeros((4, 1))
+# Placeholders for rotation and translation vectors
+r_vecs = [np.zeros((1, 1, 3), dtype=float) for _ in range(len(image_paths))]
+t_vecs = [np.zeros((1, 1, 3), dtype=float) for _ in range(len(image_paths))]
 
-np.save('rotations.npy', r_mat)
-np.save('translations.npy', t_mat)
-np.save('camera_matrix.npy', mtx)
-np.save('distortions.npy', dist)
+cv2.fisheye.calibrate(
+    world_points,
+    image_points,
+    gray.shape[::-1],
+    k_matrix,
+    d_matrix,
+    r_vecs,
+    t_vecs,
+    cal_flags,
+    criteria
+)
+
+np.save(path.join(output_dir, 'K.npy'), k_matrix)
+np.save(path.join(output_dir, 'D.npy'), d_matrix)
+
+print('K: {}'.format(str(k_matrix)))
+print('D: {}'.format(str(d_matrix)))
 
