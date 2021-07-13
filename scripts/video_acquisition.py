@@ -24,18 +24,18 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
             continue  # Likely hung on GetNextImage. Close thread.
         timestamp_arr.append(image.GetTimeStamp())
 
-        image_bgr = image.Convert(spin.PixelFormat_BGR8)
-        cv_img = image_bgr.GetData().reshape((dimensions[1], dimensions[0], 3))
-        video_writer[0].write(cv_img)
+        # image_bgr = image.Convert(spin.PixelFormat_BGR8)
+        cv_img = image.GetData().reshape((2 * dimensions[1], 2 * dimensions[0], 3))
+        cv_img = cv2.resize(cv_img, dimensions)
         if camera_matrix is not None and camera_distortions is not None:
             h, w = cv_img.shape[:2]
             # Here 0.5 is the alpha parameter, which determines how many of the original pixels should be kept in the image
-            new_mtx, roi = cv2.getOptimalNewCameraMatrix(camera_matrix, camera_distortions, (w,h), 1, (w,h))
-            cv_img = cv2.undistort(cv_img, camera_matrix, camera_distortions, None, new_mtx)
+            # new_mtx, roi = cv2.getOptimalNewCameraMatrix(camera_matrix, camera_distortions, (w,h), 1, (w,h))
+            # cv_img = cv2.undistort(cv_img, camera_matrix, camera_distortions, None, new_mtx)
             # x, y, roi_w, roi_h = roi
             # roi_image = cv_img[y:y+roi_h, x:x+roi_h, :]
             # cv_img = np.resize(roi_image, (w, h, 3))
-        video_writer[1].write(cv_img)
+        video_writer.write(cv_img)
         try:
             image.Release()
         except Exception:
@@ -44,9 +44,13 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
 
 
 class FLIRCamera:
-    def __init__(self, root_directory, framerate=CALCULATED_FRAMERATE, period_extension=0, camera_index=0, dimensions=(640,512), counter_port=u'Dev1/ctr0', port_name=u'camera_0', calibration_param_path=None):
+    # Static variables for our cameras' serial numbers:
+    CAMERA_A_SERIAL = '19390113'
+    CAMERA_B_SERIAL = '19413860'
+
+    def __init__(self, root_directory, camera_serial, counter_port, port_name, framerate=CALCULATED_FRAMERATE, period_extension=0, dimensions=(640,512), calibration_param_path=None):
         self.framerate = framerate
-        self.camera_index = camera_index
+        self.serial = camera_serial
         self.dimensions = dimensions
         self.base_dir = root_directory
 
@@ -82,10 +86,10 @@ class FLIRCamera:
         self.spin_system = flir_system  # Do not delete this line
 
         camera_list = flir_system.GetCameras()
-        if camera_list.GetSize() <= camera_index:
-            raise Exception('Camera index {} out of bounds'.format(camera_index))
-            return
-        self.camera = camera_list[camera_index]
+        try:
+            self.camera = camera_list.GetBySerial(self.serial)
+        except Exception:
+            raise Error('Failed to find camera {} with serial {}'.format(self.name, self.serial))
         self.camera.Init()
 
         # Disable automatic exposure, gain, etc... Copied from previous script
@@ -99,15 +103,13 @@ class FLIRCamera:
         start_time_str = start_time.strftime(FILENAME_DATE_FORMAT)
         if not path.exists(self.base_dir):
             os.mkdir(self.base_dir)
-        self.timestamp_path = path.join(self.base_dir, '{}_cam{}.npy'.format(start_time_str, self.camera_index))
+        self.timestamp_path = path.join(self.base_dir, '{}_{}.npy'.format(start_time_str, self.name))
         # video_directory = path.join(base_directory, start_time_str)
         # if not path.exists(video_directory):
             # os.mkdir(video_directory)
-        video_path = path.join(self.base_dir, '{}_cam{}.avi'.format(start_time_str, self.camera_index))
-        orig_path = path.join(self.base_dir, '{}_orig_cam{}.avi'.format(start_time_str, self.camera_index))
-        writer_orig = cv2.VideoWriter(orig_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions)
-        writer_transformed = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions)
-        return writer_orig, writer_transformed
+        video_path = path.join(self.base_dir, '{}_{}.avi'.format(start_time_str, self.name))
+        writer= cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions)
+        return writer
 
     def start_capture(self):
         self.video_writer = self.create_video_file()
@@ -136,8 +138,7 @@ class FLIRCamera:
             self.camera.EndAcquisition()
             self.camera_task.stop()
             self.camera_task.close()
-            self.video_writer[0].release()
-            self.video_writer[1].release()
+            self.video_writer.release()
             del self.camera
             self.spin_system.ReleaseInstance()
         except Exception:
@@ -159,25 +160,25 @@ class FLIRCamera:
 def demo(capture_dir):
     print('Running video_acquisition.py demo')
     with FLIRCamera(capture_dir,
-            camera_index=1,
-            counter_port=u'Dev1/ctr1',
-            port_name=u'camera1',
-            calibration_param_path='camera_params/cam1') as cam:
+            camera_serial=FLIRCamera.CAMERA_A_SERIAL,
+            counter_port=u'Dev1/ctr0',
+            port_name=u'camera_a',
+            calibration_param_path='camera_params/cam_a') as cam:
         cam.start_capture()
-        time.sleep(30)
+        time.sleep(0.5)
         cam.end_capture()
     print('Done')
 
 
 def demo_2cam(capture_dir):
     cam0 = FLIRCamera(capture_dir,
-            camera_index=0,
-            counter_port=u'Dev1/ctr0',
-            port_name='camera0')
-    cam1 = FLIRCamera(capture_dir,
-            camera_index=1,
+            camera_serial=FLIRCamera.CAMERA_A_SERIAL,
             counter_port=u'Dev1/ctr1',
-            port_name='camera1')
+            port_name='camera_a')
+    cam1 = FLIRCamera(capture_dir,
+            camera_serial=FLIRCamera.CAMERA_B_SERIAL,
+            counter_port=u'Dev1/ctr0',
+            port_name='camera_b')
     cam0.start_capture()
     cam1.start_capture()
     time.sleep(10)
