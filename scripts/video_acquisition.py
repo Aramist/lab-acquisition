@@ -1,6 +1,7 @@
 import datetime
 import os
 from os import path
+from queue import Queue
 from threading import Thread
 import time
 
@@ -14,8 +15,7 @@ import camera_ttl
 FILENAME_DATE_FORMAT = '%Y_%m_%d_%H_%M_%S_%f'
 CALCULATED_FRAMERATE = 29.9998066833
 
-
-def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, camera_matrix, camera_distortions):
+def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, K, D, image_queue):
     while still_active():
         try:
             # Remove timeout to prevent thread from hanging after acquisition is stopped.
@@ -23,18 +23,15 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
         except Exception:  # PySpin raises an exception when the timeout is reached, so stay silent here
             continue  # Likely hung on GetNextImage. Close thread.
         timestamp_arr.append(image.GetTimeStamp())
-
-        # image_bgr = image.Convert(spin.PixelFormat_BGR8)
-        cv_img = image.GetData().reshape((2 * dimensions[1], 2 * dimensions[0], 3))
+        image_bgr = image.Convert(spin.PixelFormat_BGR8)
+        cv_img = image.GetData().reshape((2 * dimensions[1], 2 * dimensions[0]))
         cv_img = cv2.resize(cv_img, dimensions)
-        if camera_matrix is not None and camera_distortions is not None:
-            h, w = cv_img.shape[:2]
+        if K is not None and D is not None:
+            new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(K, D, dimensions, np.eye(3), balance=0.5)
+            maps = cv2.initUndistortRectifyMap(K, D, np.eye(3), K, dimensions, cv2.CV_16SC2)
+            cv_img = cv2.remap(cv_img, *maps, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
             # Here 0.5 is the alpha parameter, which determines how many of the original pixels should be kept in the image
-            # new_mtx, roi = cv2.getOptimalNewCameraMatrix(camera_matrix, camera_distortions, (w,h), 1, (w,h))
-            # cv_img = cv2.undistort(cv_img, camera_matrix, camera_distortions, None, new_mtx)
-            # x, y, roi_w, roi_h = roi
-            # roi_image = cv_img[y:y+roi_h, x:x+roi_h, :]
-            # cv_img = np.resize(roi_image, (w, h, 3))
+        image_queue.put(cv_img)
         video_writer.write(cv_img)
         try:
             image.Release()
@@ -58,17 +55,17 @@ class FLIRCamera:
         self.name = port_name
         self.period_extension = period_extension
 
-        self.cam_mat = None
-        self.dist_vecs = None
+        self.K_matrix = None
+        self.D_matrix = None
 
         if calibration_param_path:
             # Load calibration parameters
             print('Loading calibration parameters for {} from {}'.format(self.name, calibration_param_path))
             try:
-                cam_mat_path = path.join(calibration_param_path, 'camera_matrix.npy')
-                dist_vec_path = path.join(calibration_param_path, 'distortions.npy')
-                self.cam_mat = np.load(cam_mat_path)
-                self.dist_vecs = np.load(dist_vec_path)
+                K_path = path.join(calibration_param_path, 'K.npy')
+                D_path = path.join(calibration_param_path, 'D.npy')
+                self.K_matrix = np.load(K_path)
+                self.D_matrix = np.load(D_path)
             except:
                 print('Failed to load calibration parameters for {}'.format(self.name))
 
@@ -93,10 +90,10 @@ class FLIRCamera:
         self.camera.Init()
 
         # Disable automatic exposure, gain, etc... Copied from previous script
-        self.camera.ExposureAuto.SetValue(spin.ExposureAuto_Off)
-        self.camera.GainAuto.SetValue(spin.GainAuto_Off)
-        self.camera.BalanceWhiteAuto.SetValue(spin.BalanceWhiteAuto_Off)
-        self.camera.AutoExposureTargetGreyValueAuto.SetValue(spin.AutoExposureTargetGreyValueAuto_Off)
+        #self.camera.ExposureAuto.SetValue(spin.ExposureAuto_Off)
+        #self.camera.GainAuto.SetValue(spin.GainAuto_Off)
+        #self.camera.BalanceWhiteAuto.SetValue(spin.BalanceWhiteAuto_Off)
+        #self.camera.AutoExposureTargetGreyValueAuto.SetValue(spin.AutoExposureTargetGreyValueAuto_Off)
 
     def create_video_file(self):
         start_time = datetime.datetime.now()
@@ -108,7 +105,7 @@ class FLIRCamera:
         # if not path.exists(video_directory):
             # os.mkdir(video_directory)
         video_path = path.join(self.base_dir, '{}_{}.avi'.format(start_time_str, self.name))
-        writer= cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions)
+        writer= cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions, isColor=False)
         return writer
 
     def start_capture(self):
@@ -119,6 +116,7 @@ class FLIRCamera:
 
         self.camera.BeginAcquisition()
         self.camera_task.start()
+        self.queue = Queue()
 
         # Create a function to access is_capturing, creates the effect of passing the bool by reference
         self.is_capturing = True
@@ -129,7 +127,7 @@ class FLIRCamera:
         self.timestamps = list()
         self.acq_thread = Thread(
             target=image_acquisition_loop,
-            args=(self.camera, self.timestamps, self.dimensions, self.video_writer, enabled, self.cam_mat, self.dist_vecs))
+            args=(self.camera, self.timestamps, self.dimensions, self.video_writer, enabled, self.K_matrix, self.D_matrix, self.queue))
         self.acq_thread.start()
 
     def end_capture(self):
@@ -160,12 +158,22 @@ class FLIRCamera:
 def demo(capture_dir):
     print('Running video_acquisition.py demo')
     with FLIRCamera(capture_dir,
+            framerate=30,
             camera_serial=FLIRCamera.CAMERA_A_SERIAL,
             counter_port=u'Dev1/ctr0',
-            port_name=u'camera_a',
-            calibration_param_path='camera_params/cam_a') as cam:
+            port_name=u'camera_a') as cam:
+        #    calibration_param_path='camera_params/cam_a') as cam:
         cam.start_capture()
-        time.sleep(20)
+        """
+        start_time = time.time()
+        while time.time() - start_time < 60:
+            try:
+                cv2.imshow('image', cam.queue.get(timeout=0.03))
+                cv2.waitKey(1)
+            except Exception:
+                continue
+        """
+        time.sleep(3600 * 20)
         cam.end_capture()
     print('Done')
 
