@@ -130,4 +130,5 @@ dmypy.json
 captured_frames
 timing_experiment
 calibration/
+mic_data/
 
