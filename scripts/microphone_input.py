@@ -1,6 +1,9 @@
+from collections import deque
 from functools import partial
 import os
 from os import path
+from multiprocessing import Process
+import queue
 import time
 
 import nidaqmx as nidaq
@@ -33,6 +36,8 @@ class mic_data_writer():
         self.infinite = infinite
         self.file_counter = 0
         self.present_num_samples = 0
+        self.ephys_trigger_sample = 0
+        self.saved_trigger = False
         self.current_file = None
         self.generate_new_file()
 
@@ -41,6 +46,15 @@ class mic_data_writer():
 
     def __exit__(self, type, value, traceback):
         self.close()
+
+    def increment_ephys_trigger(self, n):
+        self.ephys_trigger_sample += n
+
+    def save_ephys_trigger_sample(self):
+        if self.saved_trigger:
+            return
+        self.saved_trigger = True
+        self.tables_array.attrs.ephys_trigger_sample_no = self.ephys_trigger_sample
 
     def close(self):
         if self.current_file is not None:
@@ -91,15 +105,28 @@ class mic_data_writer():
 
 
 def read_callback(task_obj,
-        data_writer, 
-        task_handle, 
-        every_n_samples_event_type, 
-        number_of_samples, 
+        data_writer,
+        fft_queue,
+        task_handle,
+        every_n_samples_event_type,
+        number_of_samples,
         callback_data):
     data = np.array(task_obj.read(
         number_of_samples_per_channel=READ_ALL_AVAILABLE,
-        timeout=0))
-    data_writer.write(data)
+        timeout=0)).reshape((data_writer.num_microphones + 1, -1))  # + 1 to account for the ttl input channel
+    if np.max(data, axis=1)[-1] > 3:
+        # The ttl trigger was hit
+        trigger_location = np.argmax(data, axis=1)[-1]
+        data_writer.increment_ephys_trigger(trigger_location)
+        data_writer.save_ephys_trigger_sample()
+    else:
+        data_writer.increment_ephys_trigger(data.shape[1])
+    data_writer.write(data[:-1,:])  # Exclude the channel used for trigger detection
+    if fft_queue is not None:
+        try:
+            fft_queue.put(data, False)
+        except Exception:
+            pass
     return 0
 
 
@@ -122,33 +149,54 @@ class MicrophoneRecorder:
         self.microphone_task.close()
 
 
-def record(directory, port_list, name_list, duration):  # TODO: Add parameters to this function (microphone channels, sample rate and other constants, file length)
-    with nidaq.Task() as task:
-        # port_list = [u'dev1/ai{}'.format(i) for i in range(NUM_MICROPHONES)]
-        # name_list = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
-        # The following line allows each file in the sequence to have its own start time in its name
-        fname_generator = lambda : f'mic_{time.time()}_{{}}.h5'
-        
-        # Create a voltage/microphone channel for every microphone
-        for port, name in zip(port_list, name_list):
-            task.ai_channels.add_ai_voltage_chan(port,
-                name_to_assign_to_channel=name)
-        
-        # Configure the timing for this task
-        # Samples per channel is set to 5 second's worth of samples to prevent
-        # NI-DAQ from creating a really large buffer for the input
-        task.timing.cfg_samp_clk_timing(
-            rate=SAMPLE_RATE,
-            sample_mode=AcquisitionType.CONTINUOUS,
-            samps_per_chan=SAMPLE_RATE*5)
-        # The *5 grants some extra space to the buffer to avoid a crash if the timing of the retrieval from the buffer is a bit off
-        with mic_data_writer(30, len(port_list), fname_generator, directory, name_list) as data_writer:
-            task.register_every_n_samples_acquired_into_buffer_event(
-                sample_interval=SAMPLE_INTERVAL,
-                callback_method=partial(read_callback, task, data_writer))
+def record(directory, port_list, name_list, duration, fft_queue, hsw_ttl_port):  # TODO: Add parameters to this function (microphone channels, sample rate and other constants, file length)
+    task = nidaq.Task()
+    # The following line allows each file in the sequence to have its own start time in its name
+    fname_generator = lambda : f'mic_{time.time()}_{{}}.h5'
+    
+    # Create a voltage/microphone channel for every microphone
+    for port, name in zip(port_list, name_list):
+        task.ai_channels.add_ai_voltage_chan(port,
+            name_to_assign_to_channel=name)
+    # One for the ttl port as well
+    task.ai_channels.add_ai_voltage_chan(hsw_ttl_port, 'hsw_ttl_input')
+    
+    # Configure the timing for this task
+    # Samples per channel is set to only 5 second's worth of samples to prevent
+    # NI-DAQ from creating a really large buffer for the input
+    task.timing.cfg_samp_clk_timing(
+        rate=SAMPLE_RATE,
+        sample_mode=AcquisitionType.CONTINUOUS,
+        samps_per_chan=SAMPLE_RATE*5)
 
-            task.start()
+    """So there is this really strange bug in nidaqmx where if you have a callback function bound to a task (like read_callback) and you attempt
+    to use this callback function to append to a multiprocessing queue (standand thread-safe queues are exempt), the process will never join 
+    and there will not be any sort of error message to indicate that the process is unresponsive."""
+    # Getting around this by maintaining a separate queue within the process that is copied into the mp queue as it receives data
+    non_mp_queue = None
+    if fft_queue is not None:
+        non_mp_queue = queue.Queue()
 
-            # Prevent python from interpreting EOF - allows the data acquisition to run
-            time.sleep(duration)
-            task.stop()
+
+    # The *5 grants some extra space to the buffer to avoid a crash if the timing of the retrieval from the buffer is a bit off
+    data_writer = mic_data_writer(30, len(port_list), fname_generator, directory, name_list)
+    task.register_every_n_samples_acquired_into_buffer_event(
+        sample_interval=SAMPLE_INTERVAL,
+        callback_method=partial(read_callback, task, data_writer, non_mp_queue))
+    task.start()
+
+    start_time = time.time()
+    while time.time() - start_time < duration:
+        try:
+            data = non_mp_queue.get(True, 0.2)
+            fft_queue.put(data)
+        except queue.Empty:
+            continue
+
+    task.stop()
+    data_writer.close()
+    task.close()
+
+
+if __name__ == '__main__':
+    record('mic_data', [u'Dev1/ai0'], [u'mic0'], 2, queue.Queue(), u'Dev1/ai2')
