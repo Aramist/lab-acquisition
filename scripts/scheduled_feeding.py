@@ -2,7 +2,10 @@ import datetime
 import sched
 import time
 
-from scripts import feeder
+if __name__ == 'scripts.scheduled_feeding':
+    from scripts import feeder
+else:
+    import feeder
 
 
 def hourly_datetime_generator(interval=3600, on_the_hour=True, stop_dt=None):

@@ -9,8 +9,11 @@ import cv2
 import numpy as np
 import PySpin as spin
 
-import camera_ttl
-
+if 'scripts' in __name__:
+    from scripts import camera_ttl
+else:
+    import camera_ttl
+    
 
 FILENAME_DATE_FORMAT = '%Y_%m_%d_%H_%M_%S_%f'
 CALCULATED_FRAMERATE = 29.9998066833
@@ -87,6 +90,7 @@ class FLIRCamera:
             self.camera = camera_list.GetBySerial(self.serial)
         except Exception:
             raise Error('Failed to find camera {} with serial {}'.format(self.name, self.serial))
+            return
         self.camera.Init()
 
         # Disable automatic exposure, gain, etc... Copied from previous script
@@ -109,13 +113,17 @@ class FLIRCamera:
         return writer
 
     def start_capture(self):
-        self.camera_task = camera_ttl.CameraTTLTask(self.framerate,
-            period_extension=self.period_extension,
-            counter_port=self.port,
-            port_name=self.name)
+        if self.port is not None:
+            self.camera_task = camera_ttl.CameraTTLTask(self.framerate,
+                period_extension=self.period_extension,
+                counter_port=self.port,
+                port_name=self.name)
+        else:
+            self.camera_task = None
 
         self.camera.BeginAcquisition()
-        self.camera_task.start()
+        if self.camera_task is not None:
+            self.camera_task.start()
         self.queue = Queue()
 
         # Create a function to access is_capturing, creates the effect of passing the bool by reference
@@ -134,8 +142,9 @@ class FLIRCamera:
         try:
             self.is_capturing = False
             self.camera.EndAcquisition()
-            self.camera_task.stop()
-            self.camera_task.close()
+            if self.camera_task is not None:
+                self.camera_task.stop()
+                self.camera_task.close()
             self.video_writer.release()
             del self.camera
             self.spin_system.ReleaseInstance()
