@@ -37,7 +37,6 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
         if image_queue is not None:
             image_queue.put(cv_img)
         video_writer.write(cv_img)
-        print(cv_img.shape)
         try:
             image.Release()
         except Exception:
