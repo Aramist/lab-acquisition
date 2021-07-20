@@ -58,11 +58,6 @@ def multi_epoch_demo(directory, duration, epoch_len):
 
 
 def spec_demo():
-	manager = multiprocessing.Manager()
-	DURATION = 15
-	mic_data_queue = manager.Queue()
-	ai_ports = [u'Dev1/ai0']
-	ai_names = [u'microphone_0']
 	mic_proc = Process(target=microphone_input.record, args=('mic_data', ai_ports, ai_names, DURATION, mic_data_queue, u'Dev1/ai2'))
 	mic_proc.start()
 
@@ -95,10 +90,10 @@ def spec_demo():
 			nperseg=1024,
 			scaling='density')
 		# Perform logarithmic scaling to accentuate the smaller signals
-		
+
 		spec[spec < TEMP_LOW] = TEMP_LOW
 		spec[spec > TEMP_HIGH] = TEMP_HIGH
-		
+
 		spec = np.log(spec)
 		maxspec, minspec = np.log(TEMP_HIGH), np.log(TEMP_LOW)
 		# maxspec, minspec = np.max(spec), np.min(spec)
@@ -109,10 +104,67 @@ def spec_demo():
 		print(spec.shape)
 		cv2.imshow('spec', spec)
 		cv2.waitKey(1)
-
-
 	mic_proc.join()
 	mic_proc.close()
+
+
+def begin_acquisition(duration, epoch_len, dispenser_interval=None, spec_queue=None, send_sync=True):
+	if dispenser_interval is not None:
+		dio_ports = ('Dev1/port0/line7',)
+		stop_dt = datetime.datetime.now() + datetime.timedelta(seconds=duration)
+		feeder_proc = Process(target=scheduled_feeding.feed_regularly, args=(dio_ports, dispenser_interval, False, stop_dt))
+		feeder_proc.start()
+
+    manager = multiprocessing.Manager()
+    mic_queue = manager.Queue()
+	ai_ports = [u'Dev1/ai{}'.format(i) for i in range(NUM_MICROPHONES)]
+	ai_names = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
+	mic_proc = Process(
+            target=microphone_input.record,
+            args=(MIC_DIRECTORY, ai_ports, ai_names, duration, mic_queue, u'Dev1/ai2'))
+	mic_proc.start()
+
+    if send_sync:
+        # Begin sending sync signal
+        co_task = ni.Task()
+        co_task.co_channels.add_co_pulse_chan_freq('Dev1/ctr0', 'counter0', freq=12206.5)
+        co_task.timing.cfg_implicit_timing(sample_mode=constants.AcquisitionType.CONTINUOUS)
+        co_task.start()
+
+	threading.Thread(target=multi_epoch_demo, args=(CAPTURE_DIRECTORY, duration, epoch_len)).start()
+
+    # Use the downtime to handle all the queue data handling
+    start_time = time.time()
+	mic_deque = deque(maxlen=20)  # 10 seconds' worth
+	while time.time() - start_time < duration:
+		try:
+			mic_data = mic_queue.get(block=True, timeout=0.15)
+		except Empty:
+			continue
+		if len(mic_deque) == 20:
+			mic_deque.popleft()
+		mic_deque.append(mic_data[0])
+		data_arr = np.concatenate(list(mic_deque), axis=0)
+		f, t, spec = signal.spectrogram( \
+			data_arr,
+			fs=microphone_input.SAMPLE_RATE,
+			nfft=1024,
+			noverlap=256,
+			nperseg=1024,
+			scaling='density')
+        spec_queue.put((f,t,spec))
+
+    mic_proc.join()
+    if dispenser_interval is not None:
+        feeder_proc.join()
+    if send_sync:
+        co_task.stop()
+        co_task.close()
+    print('Done, {}'.format(str(datetime.datetime.now())))
+    print('Closing remaining processes...')
+    mic_proc.close()
+    if dispenser_interval is not None:
+        feeder_proc.close()
 
 
 def command_line_demo():
@@ -121,43 +173,17 @@ def command_line_demo():
 	parser.add_argument('epoch_len', help='How long each epoch of data acquisition should be (in minutes)', type=int)
 	parser.add_argument('--dispenserinterval', help='How often the dispensers should be activated (in minutes)', type=int)
 	args = parser.parse_args()
-	
-	DURATION = int(60 * args.duration)
-	EPOCH_LEN = int(60 * args.epoch_len)
+
+	duration = int(60 * args.duration)
+    epoch_len = int(60 * args.epoch_len)
 	if args.dispenserinterval:
-		DISP_INTERVAL = args.dispenserinterval * 60
+		dispenser_interval = args.dispenserinterval * 60
 	else:
-		DISP_INTERVAL = None  # Don't run the dispenser
+		dispenser_interval = None  # Don't run the dispenser
 
-	if DISP_INTERVAL is not None:
-		dio_ports = ('Dev1/port0/line7',)
-		stop_dt = datetime.datetime.now() + datetime.timedelta(seconds=DURATION)
-		feeder_proc = Process(target=scheduled_feeding.feed_regularly, args=(dio_ports, DISP_INTERVAL, False, stop_dt))
-		feeder_proc.start()
-
-	mic_data_queue = Q()
-	ai_ports = [u'Dev1/ai{}'.format(i) for i in range(NUM_MICROPHONES)]
-	ai_names = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
-	mic_proc = Process(target=microphone_input.record, args=(MIC_DIRECTORY, ai_ports, ai_names, DURATION, None, u'Dev1/ai2'))
-	mic_proc.start()
-
-	# Begin sending sync signal
-	co_task = ni.Task()
-	co_task.co_channels.add_co_pulse_chan_freq('Dev1/ctr0', 'counter0', freq=12206.5)
-	co_task.timing.cfg_implicit_timing(sample_mode=constants.AcquisitionType.CONTINUOUS)
-	co_task.start()
-
-	multi_epoch_demo(CAPTURE_DIRECTORY, DURATION, EPOCH_LEN)
-
-	mic_proc.join()
-	if DISP_INTERVAL is not None:
-		feeder_proc.join()
-	print('Done, {}'.format(str(datetime.datetime.now())))
-	print('Closing remaining processes...')
-	mic_proc.close()
-	if DISP_INTERVAL is not None:
-		feeder_proc.close()
+    begin_acquisition(duration, epoch_len, dispenser_interval, block=True)
 
 
 if __name__ == '__main__':
     command_line_demo()
+
