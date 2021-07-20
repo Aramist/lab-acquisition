@@ -59,7 +59,7 @@ def multi_epoch_demo(directory, duration, epoch_len):
 
 def spec_demo():
 	manager = multiprocessing.Manager()
-	DURATION = 20
+	DURATION = 15
 	mic_data_queue = manager.Queue()
 	ai_ports = [u'Dev1/ai0']
 	ai_names = [u'microphone_0']
@@ -67,6 +67,9 @@ def spec_demo():
 	mic_proc.start()
 
 	cv2.namedWindow('spec', cv2.WINDOW_AUTOSIZE)
+
+	TEMP_HIGH = 2e-9
+	TEMP_LOW = 60e-11
 
 	print('Started mic process')
 
@@ -83,18 +86,22 @@ def spec_demo():
 		if len(mic_deque) < 20:
 			print(20 - len(mic_deque))
 			# continue
-		shape_arr = [a.shape for a in mic_deque]
 		data_arr = np.concatenate(list(mic_deque), axis=0)
 		f, t, spec = signal.spectrogram( \
 			data_arr,
 			fs=microphone_input.SAMPLE_RATE,
 			nfft=1024,
-			noverlap=64,
+			noverlap=256,
 			nperseg=1024,
 			scaling='density')
 		# Perform logarithmic scaling to accentuate the smaller signals
+		
+		spec[spec < TEMP_LOW] = TEMP_LOW
+		spec[spec > TEMP_HIGH] = TEMP_HIGH
+		
 		spec = np.log(spec)
-		maxspec, minspec = np.max(spec), np.min(spec)
+		maxspec, minspec = np.log(TEMP_HIGH), np.log(TEMP_LOW)
+		# maxspec, minspec = np.max(spec), np.min(spec)
 		# Perform the scaling and convert to int for image viewing
 		# The reversal of the 0 axis is necessary here because opencv uses matrix style indexing
 		# Although this might not need to be conserved after switching to d3
@@ -108,7 +115,7 @@ def spec_demo():
 	mic_proc.close()
 
 
-if __name__ == '__main__':
+def command_line_demo():
 	parser = argparse.ArgumentParser()
 	parser.add_argument('duration', help='How long the script should run (in hours)', type=float)
 	parser.add_argument('epoch_len', help='How long each epoch of data acquisition should be (in minutes)', type=int)
@@ -150,3 +157,7 @@ if __name__ == '__main__':
 	mic_proc.close()
 	if DISP_INTERVAL is not None:
 		feeder_proc.close()
+
+
+if __name__ == '__main__':
+    command_line_demo()
