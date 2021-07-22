@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        
+        <title>Control Center</title>
+        <meta name="description" content="A webpage for controlling acquisition." />
+        <meta name="author" content="Aramis Tanelus" />
+
+        <!--
+        <link rel="icon" href="/favicon.ico" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        -->
+
+        <link rel="stylesheet" href="{{url_for('static', filename='style.css')}}" />
+    </head>
+    <body>
+        <div id="body-container">
+            <div id="top-row">
+                <div id="controls"></div>
+                <div id="camera_feed"></div>
+            </div>
+            <div id="spectrogram"></div>
+        </div>
+        <script src="https://d3js.org/d3.v7.min.js"></script>
+        <script src="{{url_for('static', filename='script.js')}}"></script>
+    </body>
+</html>

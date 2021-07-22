@@ -1,0 +1,23 @@
+#body-container {
+    display: flex;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    justify-content: center;
+    align-items: center;
+}
+
+#top-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+#spectrogram {
+    height: 550;
+    width: 1650;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
