@@ -1,8 +1,10 @@
 from collections import deque
 from itertools import cycle
-import time
 import queue
+import threading
+import time
 
+import cv2
 import h5py
 import numpy as np
 from scipy import signal
@@ -10,7 +12,7 @@ from scipy import signal
 
 def fake_mic_data():
     file = h5py.File('mic.h5', 'r')
-    arr = file['analog_input'][0]
+    arr = np.mean(file['analog_input'], axis=0)
     cyc = cycle(arr)
     while True:
         ret = np.array(
@@ -20,6 +22,24 @@ def fake_mic_data():
         yield(ret)
 
     return np.random.rand(1, 62500)
+
+def frame_generator(file):
+    while True:
+        cap = cv2.VideoCapture(file)
+        ret, frame = cap.read()
+        while ret:
+            yield frame
+            time.sleep(1/30)
+            ret, frame = cap.read()
+
+
+def fake_camera_task(duration, image_queue, filepath):
+    generator = frame_generator(filepath)
+    for frame in generator:
+        if len(frame.shape) > 2:
+            image_queue.put(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+        else:
+            image_queue.put(frame)
 
 
 def fake_spec_task(duration, spec_queue):
@@ -46,6 +66,15 @@ def fake_spec_task(duration, spec_queue):
         spec_queue.put(spec_data)
         time.sleep(0.5)
 
+
+def fake_video_audio(duration, audio_queue, video_queue):
+    if video_queue is None or audio_queue is None:
+        return
+    audio_thread = threading.Thread(target=fake_spec_task, args=(duration, audio_queue))
+    video_thread = threading.Thread(target=fake_camera_task, args=(duration, video_queue, 'video.avi'))
+
+    audio_thread.start()
+    video_thread.start()
 
 if __name__ == '__main__':
     fake_spec_task(3, queue.Queue())
