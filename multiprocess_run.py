@@ -160,6 +160,8 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, spec_queue=N
             spec_queue.put((f,t,spec))
 
     mic_proc.join()
+    # TODO: Create logging task for analog input on camera frame trigger
+    # TODO: Integrate it with GetFrameId to ensure no frames are dropped
     if dispenser_interval is not None:
         feeder_proc.join()
     if send_sync:
