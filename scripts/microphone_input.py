@@ -1,4 +1,5 @@
 from collections import deque
+import datetime
 from functools import partial
 import os
 from os import path
@@ -149,10 +150,10 @@ class MicrophoneRecorder:
         self.microphone_task.close()
 
 
-def record(directory, port_list, name_list, duration, fft_queue, hsw_ttl_port):  # TODO: Add parameters to this function (microphone channels, sample rate and other constants, file length)
+def record(directory, acq_started, port_list, name_list, duration, fft_queue, hsw_ttl_port):  # TODO: Add parameters to this function (microphone channels, sample rate and other constants, file length)
     task = nidaq.Task()
     # The following line allows each file in the sequence to have its own start time in its name
-    fname_generator = lambda : f'mic_{time.time()}_{{}}.h5'
+    fname_generator = lambda : 'mic_{}.h5'.format(datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f'))
     
     # Create a voltage/microphone channel for every microphone
     for port, name in zip(port_list, name_list):
@@ -183,16 +184,25 @@ def record(directory, port_list, name_list, duration, fft_queue, hsw_ttl_port): 
     task.register_every_n_samples_acquired_into_buffer_event(
         sample_interval=SAMPLE_INTERVAL,
         callback_method=partial(read_callback, task, data_writer, non_mp_queue))
+
+    while not acq_started.value:
+        pass  # Wait for everything else to be ready
     task.start()
 
     start_time = time.time()
-    while time.time() - start_time < duration:
-        try:
-            if non_mp_queue is not None and fft_queue is not None:
-                data = non_mp_queue.get(True, 0.2)
-                fft_queue.put(data)
-        except queue.Empty:
-            continue
+    try:
+        while acq_started.value:
+            try:
+                if non_mp_queue is not None and fft_queue is not None:
+                    data = non_mp_queue.get(True, 0.2)
+                    fft_queue.put(data)
+            except queue.Empty:
+                continue
+            except KeyboardInterrupt:
+                break
+    except KeyboardInterrupt:
+        print('Microphone_input: attempting to close task')
+
 
     task.stop()
     data_writer.close()

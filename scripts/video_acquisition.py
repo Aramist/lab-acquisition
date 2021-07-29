@@ -55,11 +55,12 @@ class FLIRCamera:
     CAMERA_A_SERIAL = '19390113'
     CAMERA_B_SERIAL = '19413860'
 
-    def __init__(self, root_directory, camera_serial, counter_port, port_name, framerate=CALCULATED_FRAMERATE, period_extension=0, dimensions=(640,512), calibration_param_path=None, use_queue=False):
+    def __init__(self, root_directory, acq_enabled, camera_serial, counter_port, port_name, framerate=CALCULATED_FRAMERATE, period_extension=0, dimensions=(640,512), calibration_param_path=None, use_queue=False):
         self.framerate = framerate
         self.serial = camera_serial
         self.dimensions = dimensions
         self.base_dir = root_directory
+        self.acq_enabled = acq_enabled
 
         self.port = counter_port
         self.name = port_name
@@ -141,7 +142,7 @@ class FLIRCamera:
 
         # Create a function to access is_capturing, creates the effect of passing the bool by reference
         self.is_capturing = True
-        enabled = lambda: self.is_capturing
+        enabled = lambda: self.is_capturing and self.acq_enabled.value
 
         # Begin separate thread for continued image acquisition:
         self.video_writer = self.create_video_file()
