@@ -19,7 +19,7 @@ from scripts import microphone_input, scheduled_feeding, video_acquisition
 
 
 CAPTURE_DIRECTORY = 'captured_frames'
-NUM_MICROPHONES = 2
+NUM_MICROPHONES = 4
 MIC_DIRECTORY = 'mic_data'
 
 
@@ -59,7 +59,7 @@ def multi_epoch_demo(directory, duration, epoch_len):
 
 
 def spec_demo():
-    mic_proc = Process(target=microphone_input.record, args=('mic_data', ai_ports, ai_names, DURATION, mic_data_queue, u'Dev1/ai2'))
+    mic_proc = Process(target=microphone_input.record, args=('mic_data', ai_ports, ai_names, DURATION, mic_data_queue, u'Dev1/ai3'))
     mic_proc.start()
 
     cv2.namedWindow('spec', cv2.WINDOW_AUTOSIZE)
@@ -122,17 +122,18 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, spec_queue=N
     ai_names = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
     mic_proc = Process(
             target=microphone_input.record,
-            args=(MIC_DIRECTORY, ai_ports, ai_names, duration, mic_queue, u'Dev1/ai2'))
+            args=(MIC_DIRECTORY, ai_ports, ai_names, duration, mic_queue, u'Dev1/ai7'))
     mic_proc.start()
 
     if send_sync:
         # Begin sending sync signal
         co_task = ni.Task()
-        co_task.co_channels.add_co_pulse_chan_freq('Dev1/ctr0', 'counter0', freq=12206.5)
+        co_task.co_channels.add_co_pulse_chan_freq('Dev1/ctr0', 'counter0', freq=125000)
+        #co_task.co_channels.add_co_pulse_chan_freq('Dev1/ctr0', 'counter0', freq=12206.5)
         co_task.timing.cfg_implicit_timing(sample_mode=constants.AcquisitionType.CONTINUOUS)
         co_task.start()
 
-    threading.Thread(target=multi_epoch_demo, args=(CAPTURE_DIRECTORY, duration, epoch_len)).start()
+    # threading.Thread(target=multi_epoch_demo, args=(CAPTURE_DIRECTORY, duration, epoch_len)).start()
 
 
     if spec_queue is None:
@@ -174,7 +175,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, spec_queue=N
 
 def command_line_demo():
     parser = argparse.ArgumentParser()
-    parser.add_argument('duration', help='How long the script should run (in hours)', type=float)
+    parser.add_argument('duration', help='How long the script should run (in minutes)', type=float)
     parser.add_argument('epoch_len', help='How long each epoch of data acquisition should be (in minutes)', type=int)
     parser.add_argument('--dispenserinterval', help='How often the dispensers should be activated (in minutes)', type=int)
     args = parser.parse_args()

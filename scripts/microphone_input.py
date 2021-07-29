@@ -188,8 +188,9 @@ def record(directory, port_list, name_list, duration, fft_queue, hsw_ttl_port): 
     start_time = time.time()
     while time.time() - start_time < duration:
         try:
-            data = non_mp_queue.get(True, 0.2)
-            fft_queue.put(data)
+            if non_mp_queue is not None and fft_queue is not None:
+                data = non_mp_queue.get(True, 0.2)
+                fft_queue.put(data)
         except queue.Empty:
             continue
 
@@ -199,4 +200,4 @@ def record(directory, port_list, name_list, duration, fft_queue, hsw_ttl_port): 
 
 
 if __name__ == '__main__':
-    record('mic_data', [u'Dev1/ai0'], [u'mic0'], 2, queue.Queue(), u'Dev1/ai2')
+    record('mic_data', [u'Dev1/ai0'], [u'mic0'], (60000 // 200) + 30, None, u'Dev1/ai2')

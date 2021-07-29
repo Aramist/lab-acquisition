@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-vid_path = 'captured_frames/video.avi'
+vid_path = 'video.avi'
 reader = cv2.VideoCapture(vid_path)
 
 means = list()

@@ -18,7 +18,7 @@ else:
 FILENAME_DATE_FORMAT = '%Y_%m_%d_%H_%M_%S_%f'
 CALCULATED_FRAMERATE = 29.9998066833
 
-def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, K, D, image_queue):
+def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, K, D, image_queue, save_ts_fn):
     while still_active():
         try:
             # Remove timeout to prevent thread from hanging after acquisition is stopped.
@@ -35,13 +35,19 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
             cv_img = cv2.remap(cv_img, *maps, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
             # Here 0.5 is the alpha parameter, which determines how many of the original pixels should be kept in the image
         if image_queue is not None:
-            image_queue.put(cv_img)
+            #image_queue.put(cv_img)
+            pass
         video_writer.write(cv_img)
+        del cv_img
         try:
             image.Release()
+            image_bgr.Release()
         except Exception:
             # If this thread is in the middle of a loop when still_active changes, the call to image.release will fail
             pass
+        # Reset timestamp array every 5 minutes to reduce memory consumption
+        if len(timestamp_arr) > 30 * 60 * 5:
+            save_ts_fn()
 
 
 class FLIRCamera:
@@ -49,7 +55,7 @@ class FLIRCamera:
     CAMERA_A_SERIAL = '19390113'
     CAMERA_B_SERIAL = '19413860'
 
-    def __init__(self, root_directory, camera_serial, counter_port, port_name, framerate=CALCULATED_FRAMERATE, period_extension=0, dimensions=(640,512), calibration_param_path=None):
+    def __init__(self, root_directory, camera_serial, counter_port, port_name, framerate=CALCULATED_FRAMERATE, period_extension=0, dimensions=(640,512), calibration_param_path=None, use_queue=False):
         self.framerate = framerate
         self.serial = camera_serial
         self.dimensions = dimensions
@@ -61,6 +67,8 @@ class FLIRCamera:
 
         self.K_matrix = None
         self.D_matrix = None
+
+        self.use_queue = use_queue
 
         if calibration_param_path:
             # Load calibration parameters
@@ -113,6 +121,10 @@ class FLIRCamera:
         writer= cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions, isColor=True)
         return writer
 
+    def save_ts_array(self):
+        np.save(self.timestamp_path, np.array(self.timestamps))
+        self.timestamps.clear()
+
     def start_capture(self):
         if self.port is not None:
             self.camera_task = camera_ttl.CameraTTLTask(self.framerate,
@@ -125,7 +137,7 @@ class FLIRCamera:
         self.camera.BeginAcquisition()
         if self.camera_task is not None:
             self.camera_task.start()
-        self.queue = Queue()
+        self.queue = Queue() if self.use_queue else None
 
         # Create a function to access is_capturing, creates the effect of passing the bool by reference
         self.is_capturing = True
@@ -136,7 +148,7 @@ class FLIRCamera:
         self.timestamps = list()
         self.acq_thread = Thread(
             target=image_acquisition_loop,
-            args=(self.camera, self.timestamps, self.dimensions, self.video_writer, enabled, self.K_matrix, self.D_matrix, self.queue))
+            args=(self.camera, self.timestamps, self.dimensions, self.video_writer, enabled, self.K_matrix, self.D_matrix, self.queue, self.save_ts_array))
         self.acq_thread.start()
 
     def end_capture(self):
@@ -152,7 +164,7 @@ class FLIRCamera:
         except Exception:
             # Things most likely released out of order
             pass
-        np.save(self.timestamp_path, np.array(self.timestamps))
+        self.save_ts_array()
 
     def __enter__(self):
         return self
