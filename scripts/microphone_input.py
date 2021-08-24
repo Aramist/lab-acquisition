@@ -34,7 +34,7 @@ class mic_data_writer():
         self.num_microphones = num_microphones
         self.directory = directory
         self.enforced_filename = enforced_filename
-        self.identity_list = identity_list
+        self.array_labels = identity_list
         self.infinite = infinite
         self.file_counter = 0
         self.present_num_samples = 0
@@ -67,7 +67,8 @@ class mic_data_writer():
             if self.saved_rising:
                 return
             self.saved_rising = True
-            self.tables_array.attrs.ephys_trigger_rising_edge = self.ephys_rising_edge
+            self.trig_array.append(np.array([self.ephys_rising_edge], dtype=int))
+            # self.tables_array.attrs.ephys_trigger_rising_edge = self.ephys_rising_edge
         else:
             if self.saved_falling:
                 return
@@ -79,19 +80,21 @@ class mic_data_writer():
             self.current_file.close()
 
     def write(self, data):
-        if self.tables_array is None:
+        if self.arrays is None:
             return
 
         remainder = None
         if self.present_num_samples + data.shape[1] > self.target_num_samples:
             to_add = self.target_num_samples - self.present_num_samples
-            self.tables_array.append(data[:, :to_add])
+            for i in range(data.shape[0]):
+                self.arrays[i].append(data[i, :to_add])
             remainder = data[:, to_add:]
             if not self.infinite:
                 self.present_num_samples = self.target_num_samples
                 self.no_epoch_num_samples += to_add
         else:
-            self.tables_array.append(data)
+            for i in range(data.shape[0]):
+                self.arrays[i].append(data[i])
             if not self.infinite:
                 self.present_num_samples += data.shape[1]
                 self.no_epoch_num_samples += data.shape[1]
@@ -114,7 +117,7 @@ class mic_data_writer():
 
         if self.no_epoch_num_samples >= self.total_num_samples:
             self.current_file = None
-            self.tables_array = None
+            self.arrays = None
             self.cam_array = None
             return
 
@@ -139,14 +142,23 @@ class mic_data_writer():
         identifiers[:] = self.identity_list
         """
 
+        # Create the analog_channels group to keep everything organized
+        ai_group = self.current_file.create_group(self.current_file.root, 'ai_channels')
+
         # Create an expandable array for analog input
         float_atom = tables.Float32Atom()
-        self.tables_array = self.current_file.create_earray(
-            self.current_file.root,
-            'analog_input',
-            float_atom,
-            (self.num_microphones, 0),
-            expectedrows=self.target_num_samples)
+        self.arrays = list()
+        for channel_name in self.array_labels:
+            # Arrays are added here in the order in which they appear in port_list, which is also the order in which they are created,
+            # Which means the data received will also be in this order
+            self.arrays.append(
+                self.current_file.create_earray(
+                    ai_group,
+                    channel_name,
+                    float_atom,
+                    (0,),
+                    expectedrows=self.target_num_samples)
+                )
 
 
         int_atom = tables.Int32Atom()
@@ -156,6 +168,14 @@ class mic_data_writer():
             int_atom,
             (0,),
             expectedrows=self.target_num_samples // 125000 * 30)
+
+        self.trig_array = self.current_file.create_earray(
+            self.current_file.root,
+            'ephys_trigger',
+            int_atom,
+            (0,),
+            expectedrows=2
+        )
 
         # Update necessary values
         self.file_counter += 1
