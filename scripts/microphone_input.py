@@ -16,12 +16,12 @@ import tables
 
 # Local constants
 SAMPLE_RATE = 125000  # Hz
-READ_CYCLE_PERIOD = 0.5  # Amount of time (sec) between each read from the buffer
+READ_CYCLE_PERIOD = 0.25  # Amount of time (sec) between each read from the buffer
 SAMPLE_INTERVAL = int(SAMPLE_RATE * READ_CYCLE_PERIOD)
 
 
 class mic_data_writer():
-    def __init__(self, length, num_microphones, filename_format_func, directory, identity_list, infinite=False, sample_rate=SAMPLE_RATE):
+    def __init__(self, total_length, epoch_length, num_microphones, directory, identity_list, infinite=False, sample_rate=SAMPLE_RATE, enforced_filename=None):
         """Parameters:
             length: the length of each file, in minutes
             filename_format: a string used to determine the filename, with {} in
@@ -29,16 +29,21 @@ class mic_data_writer():
             directory: the directory in which the files should be created
         """
         # TODO: Change filename format, re-add filename format function
-        self.target_num_samples = int(length * 60 * sample_rate)
+        self.target_num_samples = int(epoch_length * 60 * sample_rate)
+        self.total_num_samples = int(total_length * 60 * sample_rate)
         self.num_microphones = num_microphones
-        self.filename_generator = filename_format_func
         self.directory = directory
+        self.enforced_filename = enforced_filename
         self.identity_list = identity_list
         self.infinite = infinite
         self.file_counter = 0
         self.present_num_samples = 0
-        self.ephys_trigger_sample = 0
-        self.saved_trigger = False
+        self.no_epoch_num_samples = 0
+        self.ephys_rising_edge = 0
+        self.saved_rising = False
+        self.ephys_falling_edge = 0
+        self.saved_falling = False
+        self.cam_accumulator = 0
         self.current_file = None
         self.generate_new_file()
 
@@ -48,37 +53,80 @@ class mic_data_writer():
     def __exit__(self, type, value, traceback):
         self.close()
 
-    def increment_ephys_trigger(self, n):
-        self.ephys_trigger_sample += n
+    def increment_ephys_trigger(self, n, rising=True):
+        if rising:
+            self.ephys_rising_edge += n
+        else:
+            self.ephys_falling_edge += n
 
-    def save_ephys_trigger_sample(self):
-        if self.saved_trigger:
-            return
-        self.saved_trigger = True
-        self.tables_array.attrs.ephys_trigger_sample_no = self.ephys_trigger_sample
+    def increment_cam_accumulator(self, n):
+        self.cam_accumulator += n
+
+    def save_ephys_trigger_sample(self, rising=True):
+        if rising:
+            if self.saved_rising:
+                return
+            self.saved_rising = True
+            self.tables_array.attrs.ephys_trigger_rising_edge = self.ephys_rising_edge
+        else:
+            if self.saved_falling:
+                return
+            self.saved_falling = True
+            # self.tables_array.attrs.ephys_trigger_falling_edge = self.ephys_falling_edge
 
     def close(self):
         if self.current_file is not None:
             self.current_file.close()
 
     def write(self, data):
-        self.tables_array.append(data)
+        if self.tables_array is None:
+            return
+
+        remainder = None
+        if self.present_num_samples + data.shape[1] > self.target_num_samples:
+            to_add = self.target_num_samples - self.present_num_samples
+            self.tables_array.append(data[:, :to_add])
+            remainder = data[:, to_add:]
+            if not self.infinite:
+                self.present_num_samples = self.target_num_samples
+                self.no_epoch_num_samples += to_add
+        else:
+            self.tables_array.append(data)
+            if not self.infinite:
+                self.present_num_samples += data.shape[1]
+                self.no_epoch_num_samples += data.shape[1]
 
         # Allaw for the option to grow the hdf file until the program halts
-        if not self.infinite:
-            self.present_num_samples += data.shape[1]
-        if self.present_num_samples > self.target_num_samples:
+        if self.present_num_samples >= self.target_num_samples:
             self.generate_new_file()
+        
+        if remainder is not None:
+            self.write(remainder)
+
+    def write_pulses(self, data):
+        if self.cam_array is not None:
+            self.cam_array.append(data)
 
     def generate_new_file(self):
         # None check to prevent errors on creation of the very first file
         if self.current_file is not None:
             self.current_file.close()
 
+        if self.no_epoch_num_samples >= self.total_num_samples:
+            self.current_file = None
+            self.tables_array = None
+            self.cam_array = None
+            return
+
         if not path.exists(self.directory):
         	os.mkdir(self.directory)
 
-        filepath = path.join(self.directory, self.filename_generator().format(self.file_counter))
+        if self.enforced_filename is None:
+            filepath = path.join(self.directory, 'mic_{}.h5'.format(datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f')))
+        else:
+            filepath = path.join(self.directory, 'mic_{}.h5'.format(self.enforced_filename))
+            self.enforced_filename = None
+
         self.current_file = tables.open_file(filepath, 'w')
         # Create a small array logging the microphones used in this reading:
         """
@@ -98,11 +146,66 @@ class mic_data_writer():
             'analog_input',
             float_atom,
             (self.num_microphones, 0),
-            expectedrows=SAMPLE_INTERVAL)
+            expectedrows=self.target_num_samples)
+
+
+        int_atom = tables.Int32Atom()
+        self.cam_array = self.current_file.create_earray(
+            self.current_file.root,
+            'camera_frames',
+            int_atom,
+            (0,),
+            expectedrows=self.target_num_samples // 125000 * 30)
 
         # Update necessary values
         self.file_counter += 1
         self.present_num_samples = 0
+
+
+
+def record_data(task_obj, data_writer, fft_queue):
+    data = np.array(task_obj.read(
+        number_of_samples_per_channel=READ_ALL_AVAILABLE,
+        timeout=0)).reshape((data_writer.num_microphones + 2, -1))  # +2 for both of the ttl-reading channels
+    trigger_location = 0
+    if np.max(data[-1]) > 3 and not data_writer.saved_rising:
+        # The ttl trigger was hit
+        trigger_location = np.argmax(np.diff(data[-1]))
+        # The falling edge must lie beyond the rising edge
+        data_writer.increment_ephys_trigger(data_writer.ephys_rising_edge, rising=False)
+        data_writer.increment_ephys_trigger(trigger_location, rising=True)
+        data_writer.save_ephys_trigger_sample(rising=True)
+        # See if the falling edge occured in the same block of data
+        if np.min(data[-1, trigger_location:]) < 3:
+            loc = np.argmin(np.diff(data[-1]))
+            data_writer.increment_ephys_trigger(loc, rising=False)
+            data_writer.save_ephys_trigger_sample(rising=False)
+        else:
+            data_writer.increment_ephys_trigger(data.shape[1], rising=False)
+    else:
+        data_writer.increment_ephys_trigger(data.shape[1], rising=True)
+    # See if the falling edge occured in a different block
+    if data_writer.saved_rising and not data_writer.saved_falling:
+        if np.min(data[-1]) < 3:
+            loc =  np.argmin(np.diff(data[-1]))
+            data_writer.increment_ephys_trigger(loc, rising=False)
+            data_writer.save_ephys_trigger_sample(rising=False)
+        else:
+            data_writer.increment_ephys_trigger(data.shape[1], rising=False)
+
+    cam_rising = np.flatnonzero((data[-2,1:] > 1) & (data[-2,:-1] < 1)) + 1 + data_writer.cam_accumulator
+    if len(cam_rising) > 0:
+        data_writer.write_pulses(cam_rising)
+    data_writer.increment_cam_accumulator(data.shape[1])
+    
+    data_writer.write(data[:data_writer.num_microphones])
+    #data_writer.write(np.concatenate((data[:-2], np.reshape(data[-1], (1, -1))), axis=0))  # Exclude the channel used for trigger detection
+    if fft_queue is not None:
+        try:
+            # Ensure the input has more than one dimension so the output doesn't end up scalar
+            fft_queue.put(np.mean(np.reshape(data[:data_writer.num_microphones], (data_writer.num_microphones, -1)), axis=0), False)
+        except Exception:
+            pass
 
 
 def read_callback(task_obj,
@@ -112,22 +215,7 @@ def read_callback(task_obj,
         every_n_samples_event_type,
         number_of_samples,
         callback_data):
-    data = np.array(task_obj.read(
-        number_of_samples_per_channel=READ_ALL_AVAILABLE,
-        timeout=0)).reshape((data_writer.num_microphones + 1, -1))  # + 1 to account for the ttl input channel
-    if np.max(data, axis=1)[-1] > 3:
-        # The ttl trigger was hit
-        trigger_location = np.argmax(data, axis=1)[-1]
-        data_writer.increment_ephys_trigger(trigger_location)
-        data_writer.save_ephys_trigger_sample()
-    else:
-        data_writer.increment_ephys_trigger(data.shape[1])
-    data_writer.write(data[:-1,:])  # Exclude the channel used for trigger detection
-    if fft_queue is not None:
-        try:
-            fft_queue.put(data, False)
-        except Exception:
-            pass
+    record_data(task_obj, data_writer, fft_queue)
     return 0
 
 
@@ -150,15 +238,20 @@ class MicrophoneRecorder:
         self.microphone_task.close()
 
 
-def record(directory, acq_started, port_list, name_list, duration, fft_queue, hsw_ttl_port):  # TODO: Add parameters to this function (microphone channels, sample rate and other constants, file length)
+def record(directory, filename, acq_started, acq_start_time, port_list, name_list, duration, epoch_len, fft_queue, hsw_ttl_port, cam_ttl_port):  # TODO: Add parameters to this function (microphone channels, sample rate and other constants, file length)
     task = nidaq.Task()
     # The following line allows each file in the sequence to have its own start time in its name
-    fname_generator = lambda : 'mic_{}.h5'.format(datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f'))
+    # fname_generator = lambda : 'mic_{}.h5'.format(datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f'))
+    # fname_generator = lambda : 'mic_{}.h5'.format(filename)
+
     
     # Create a voltage/microphone channel for every microphone
     for port, name in zip(port_list, name_list):
         task.ai_channels.add_ai_voltage_chan(port,
             name_to_assign_to_channel=name)
+
+    # One for the cameras, will hold the -2 index
+    task.ai_channels.add_ai_voltage_chan(cam_ttl_port, 'cam_ttl_port')
     # One for the ttl port as well
     task.ai_channels.add_ai_voltage_chan(hsw_ttl_port, 'hsw_ttl_input')
     
@@ -180,29 +273,33 @@ def record(directory, acq_started, port_list, name_list, duration, fft_queue, hs
 
 
     # The *5 grants some extra space to the buffer to avoid a crash if the timing of the retrieval from the buffer is a bit off
-    data_writer = mic_data_writer(30, len(port_list), fname_generator, directory, name_list)
+    channel_labels = [a.split('/')[1] for a in port_list]  # Should return something like ['ai0', 'ai1', 'ai2', ...]
+    data_writer = mic_data_writer(duration // 60, epoch_len // 60, len(port_list), directory, channel_labels, enforced_filename=filename)
     task.register_every_n_samples_acquired_into_buffer_event(
         sample_interval=SAMPLE_INTERVAL,
         callback_method=partial(read_callback, task, data_writer, non_mp_queue))
 
-    while not acq_started.value:
-        pass  # Wait for everything else to be ready
+    try:
+        while time.time() < acq_start_time.value or not acq_started.value:
+            pass  # Wait for everything else to be ready
+    except Exception:
+        return  # The program was closed before the value changed
     task.start()
 
     start_time = time.time()
     try:
-        while acq_started.value:
+        while acq_started.value and time.time() - start_time < duration:
             try:
                 if non_mp_queue is not None and fft_queue is not None:
-                    data = non_mp_queue.get(True, 0.2)
+                    data = non_mp_queue.get(timeout=0)
                     fft_queue.put(data)
             except queue.Empty:
                 continue
-            except KeyboardInterrupt:
-                break
+
     except KeyboardInterrupt:
         print('Microphone_input: attempting to close task')
-
+    
+    time.sleep(1)
 
     task.stop()
     data_writer.close()
