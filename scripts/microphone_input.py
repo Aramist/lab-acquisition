@@ -223,7 +223,7 @@ def record_data(task_obj, data_writer, fft_queue):
     if fft_queue is not None:
         try:
             # Ensure the input has more than one dimension so the output doesn't end up scalar
-            fft_queue.put(np.mean(np.reshape(data[:data_writer.num_microphones], (data_writer.num_microphones, -1)), axis=0), False)
+            fft_queue.put(np.reshape(data[:data_writer.num_microphones], (data_writer.num_microphones, -1)), False)
         except Exception:
             pass
 

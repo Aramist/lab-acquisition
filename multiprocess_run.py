@@ -183,7 +183,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         window_names = {
             # 'a': 'Camera A',
             'b': 'Camera B',
-            'mic': 'Spectrogram (All mics averaged)'
+            'mic': 'Spectrogram (Right side blue, left side red)'
         }
 
         create_cv_windows(window_names.values())
@@ -258,33 +258,76 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                     # TODO: Delete
                     start_calc = time.time()
                     
-                    f, t, spec = scipy.signal.spectrogram( \
-                        mic_data,
+                    _, _, spec_right = scipy.signal.spectrogram( \
+                        mic_data[1],
                         fs=microphone_input.SAMPLE_RATE,
                         nfft=512,
                         noverlap=0,
                         nperseg=512,
                         scaling='density')
 
+                    _, _, spec_left = scipy.signal.spectrogram( \
+                        mic_data[0],
+                        fs=microphone_input.SAMPLE_RATE,
+                        nfft=512,
+                        noverlap=0,
+                        nperseg=512,
+                        scaling='density')
+
+                    spec_left[spec_left < TEMP_LOW] = TEMP_LOW
+                    spec_right[spec_right < TEMP_LOW] = TEMP_LOW
+                    spec = (spec_right - spec_left)
+                    # Clip high signals after subtraction to prevent losing info on sounds that are significantly louder through one mic
+                    spec[spec > TEMP_HIGH] = TEMP_HIGH
+                    spec[spec < -TEMP_HIGH] = -TEMP_HIGH
+
+                    orig_shape = spec.shape
+                    spec = spec.reshape((orig_shape[0], orig_shape[1], 1))  # Add a new axis in preparation to introduce colors
+
+                    # Reshaping it this way allows the interpolation to be broadcast through numpy efficiently
+                    # Not making these unsigned because they have to be subtracted from each other later
+                    blue_color = np.array([218, 214, 109], dtype=np.int8).reshape((1, 1, 3))
+                    white_color = np.array([255, 255, 255], dtype=np.int8).reshape((1, 1, 3))
+                    red_color = np.array([87, 66, 206], dtype=np.int8).reshape((1, 1, 3))
+                    
                     # crop to certain frequency
                     # idx = np.argmin(np.abs(f - 6000))
                     # spec = spec[:idx, :]
-                    # Perform logarithmic scaling to accentuate the smaller signals
-                    spec[spec < TEMP_LOW] = TEMP_LOW
-                    spec[spec > TEMP_HIGH] = TEMP_HIGH
+                    
             
                     #spec = np.log(spec)
                     #maxspec, minspec = np.log(TEMP_HIGH), np.log(TEMP_LOW)
-                    maxspec, minspec = TEMP_HIGH, TEMP_LOW
-                    # maxspec, minspec = np.max(spec), np.min(spec)
-                    # Perform the scaling and convert to int for image viewing
+                    maxspec, minspec = TEMP_HIGH, -TEMP_HIGH
+
+                    # Perform the interpolation twice, producing two separate images that get combined at the end based on the mask
+                    positive_mask = spec >= 0
+                    # Positive corresponding to regions where mic 1 (right side) is louder
+                    # Here, the min is treated as 0, so it is excluded
+                    inter_blue = spec * (blue_color - white_color) / maxspec + white_color
+
+                    # Here the min is treated as -TEMP_HIGH and the max is 0
+                    inter_red = (spec - minspec) * (white_color - red_color) / (0 - minspec) + red_color
+
+                    # Combine them by adding only the portions where the mask is active
+                    blue_positive = (inter_blue * positive_mask)
+                    red_negative = (inter_red * ~positive_mask)
+                    combined_frame = blue_positive + red_negative
+
+                    print('inter blue min', np.min(blue_positive))
+                    print('inter blue max', np.max(blue_positive))
+
+                    print('inter red min', np.min(red_negative))
+                    print('inter red max', np.max(red_negative))
+                    #print(np.min(combined_frame))
+                    #print(np.max(combined_frame))
+                    combined_frame[combined_frame < 0] = 0
+                    combined_frame[combined_frame > 255] = 255
                     # The reversal of the 0 axis is necessary here because opencv uses matrix style indexing
-                    # Although this might not need to be conserved after switching to d3
-                    spec = ((spec - minspec) * 255 / (maxspec - minspec)).astype(np.uint8)[::-1, :]
-                    mic_deque.append(spec)
+                    combined_frame = combined_frame.astype(np.uint8)[::-1, :]
+
+                    mic_deque.append(combined_frame)
                     complete_image = np.ascontiguousarray(np.concatenate(list(mic_deque), axis=1), dtype=np.uint8)
 
-                    # TODO: delete
                     stop_calc = time.time()
                     duration_text = '{:.2f}ms'.format(1000 * (stop_calc - start_calc))
                     
@@ -294,7 +337,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                         (50, 50),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         1,
-                        255,
+                        (255, 255, 255),
                         1
                     )
                     cv2.imshow(window_names['mic'], complete_image)
