@@ -85,8 +85,13 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
     num_epochs = duration // epoch_len
     with Pool(processes=2) as pool:
         print('initializing cameras: {}'.format(str(camera_names)))
-        pool.map(partial(camera_process, acq_enabled, acq_start_time, epoch_len, num_epochs), camera_params)
-        print('Closing processes')
+        try:
+            pool.map(partial(camera_process, acq_enabled, acq_start_time, epoch_len, num_epochs), camera_params)
+        except KeyboardInterrupt:
+            pass
+        except Exception:
+            pass
+        print('Closing camera processes')
         pool.terminate()
 
     """All times are expected in seconds"""
@@ -150,6 +155,88 @@ def spec_demo():
 """
 
 
+def calc_spec_frame_segment(left_audio, right_audio, diff_scaling_factor=1):
+    _, _, lspec = scipy.signal.spectrogram(
+        left_audio,
+        fs=microphone_input.SAMPLE_RATE,
+        nfft=512,
+        noverlap=0,
+        nperseg=512
+    )
+
+    _, _, rspec = scipy.signal.spectrogram(
+        right_audio,
+        fs=microphone_input.SAMPLE_RATE,
+        nfft=512,
+        noverlap=0,
+        nperseg=512
+    )
+
+    rspec /= 1.85  # TEMPORARY: Account for the inflated readings from the right microphone
+
+    # If these get changed in the future, note that they are enterred here in BGR order, not RGB
+    black_color = np.array([0, 0, 0]).reshape((1, 1, 3))
+    white_color = np.array([255, 255, 255]).reshape((1, 1, 3))
+    red_color = np.array([87, 66, 206]).reshape((1, 1, 3))
+    blue_color = np.array([218, 214, 109]).reshape((1, 1, 3))
+
+    # Compute 2 separate images:
+    # One containing the average (for maintaining the baseline in the case where the signals are equally powerful on both sides)
+    # One containing the difference (for modifying the previous image to reflect the difference in recorded power)
+    # Add a new axis to both to allow them to be broadcast with the color vectors effeciently
+    # Here, subtracting left from right means positive value of diff -> more power on the right side -> more blue color
+    avg = ((rspec + lspec) / 2)[:, :, np.newaxis]
+    diff = ((rspec - lspec) * diff_scaling_factor)[:, :, np.newaxis]
+
+    # Predetermined scaling constants found by taking the 10% and 90% quantiles over a 60 second interval
+    minavg, maxavg = 90e-11, 1000e-11
+    # This is more arbitrary: the minimum power difference between the two mics for the signals to be differentiated between the two
+    diff_inner_thresh = 450e-11
+    
+    # Truncate the average and diff arrays with these value to prevent the final image from underflowing or overflowing
+    avg[avg > maxavg] = maxavg
+    avg[avg < minavg] = minavg
+    # minavg doesn't work in the same way for diff because it spans the negative numbers. avg is originally non-negative
+    diff[diff < -maxavg] = -maxavg
+    diff[diff > maxavg] = maxavg
+    diff[(diff < diff_inner_thresh) & (diff > -diff_inner_thresh)] = 0
+    diff[avg < minavg] = 0
+
+
+    # Interpolate avg between black and white
+    # Original range: minavg, maxavg
+    # New range: black_color, white_color
+    # While it is redundant to subtract and add black_color here, it's useful to keep it, just in case the color changes in the future
+    avg_img = (avg - minavg) * (white_color - black_color) / (maxavg - minavg) + black_color
+    del avg
+
+    # Next in interpolating the locations with positive diff between their present color and blue_color
+    # The strength of the diff at that point will be used as the point of evaluation for the linear transform
+
+    # First scale diff to -1,1 for convenience
+    diff /= (maxavg * diff_scaling_factor)
+
+    # Remove the new axis on the mask so it can be applied to avg_img
+    # I thought it would be fine to just not add the new axis to diff in the first place but doing that broke something
+    positive_mask = (diff > 0).reshape(diff.shape[:2])
+
+    # Blue first
+    # Original range: scaled_inner_thresh, 1
+    # New range: present color, blue_color
+    # Note: while the true range of diff is -1, 1, this operation is only performed on the positive values of diff, so it is effectively ", 1
+    avg_img[positive_mask] = diff[positive_mask] * (blue_color - avg_img[positive_mask]) + avg_img[positive_mask]
+
+    # Now red
+    # Original range: -1, -scaled_inner_thresh
+    # New range: present color, red_color
+    # Note: I'm not exactly sure why the negative is needed in on diff here, maybe the new range should be reversed? In any case, it makes it work properly
+    avg_img[~positive_mask] = -diff[~positive_mask] * (red_color - avg_img[~positive_mask]) + avg_img[~positive_mask]
+
+    # Finally, reverse the 0 axis because opencv uses a different system of indexing images than scipy
+    # In opencv, image[0] corresponds to the top row of the image, just like a matrix in math
+    # No need to typecast to uint8 here because it gets done at the ascontiguousarray step
+    return avg_img[::-1]
+
 
 
 def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None, spec_queue=None, send_sync=True):
@@ -177,7 +264,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
 
         # mic_queue = None
         mic_queue = manager.Queue()
-        mic_deque = deque(maxlen=40)
+        mic_deque = deque(maxlen=20)
         # cam_queue = None
         cam_a_queue, cam_b_queue = None, manager.Queue()
         window_names = {
@@ -223,11 +310,6 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
 
         signal.signal(signal.SIGINT, sigint_handler)
 
-
-        # Constants for the spectrogram display
-        TEMP_HIGH = 2e-9
-        TEMP_LOW = 50e-11
-
         # if spec_queue is None:
         start = time.time()
         last_printed = 0
@@ -250,86 +332,15 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
 
                 # Check for microphone data and display it
                 try:
-                    mic_data = mic_queue.get(timeout=0)
-                    #mic_deque.append(mic_data)
-                    #data_arr = np.concatenate(list(mic_deque), axis=0)
-
-                    # START CALCULATION TIME
-                    # TODO: Delete
                     start_calc = time.time()
                     
-                    _, _, spec_right = scipy.signal.spectrogram( \
-                        mic_data[1],
-                        fs=microphone_input.SAMPLE_RATE,
-                        nfft=512,
-                        noverlap=0,
-                        nperseg=512,
-                        scaling='density')
-
-                    _, _, spec_left = scipy.signal.spectrogram( \
-                        mic_data[0],
-                        fs=microphone_input.SAMPLE_RATE,
-                        nfft=512,
-                        noverlap=0,
-                        nperseg=512,
-                        scaling='density')
-
-                    spec_left[spec_left < TEMP_LOW] = TEMP_LOW
-                    spec_right[spec_right < TEMP_LOW] = TEMP_LOW
-                    spec = (spec_right - spec_left)
-                    # Clip high signals after subtraction to prevent losing info on sounds that are significantly louder through one mic
-                    spec[spec > TEMP_HIGH] = TEMP_HIGH
-                    spec[spec < -TEMP_HIGH] = -TEMP_HIGH
-
-                    orig_shape = spec.shape
-                    spec = spec.reshape((orig_shape[0], orig_shape[1], 1))  # Add a new axis in preparation to introduce colors
-
-                    # Reshaping it this way allows the interpolation to be broadcast through numpy efficiently
-                    # Not making these unsigned because they have to be subtracted from each other later
-                    blue_color = np.array([218, 214, 109], dtype=np.int8).reshape((1, 1, 3))
-                    white_color = np.array([255, 255, 255], dtype=np.int8).reshape((1, 1, 3))
-                    red_color = np.array([87, 66, 206], dtype=np.int8).reshape((1, 1, 3))
+                    mic_data = mic_queue.get(timeout=0)
+                    color_frame = calc_spec_frame_segment(mic_data[0], mic_data[1], diff_scaling_factor=2)
+                    mic_deque.append(color_frame)
+                    complete_image = np.ascontiguousarray(np.concatenate(mic_deque, axis=1), dtype=np.uint8)
                     
-                    # crop to certain frequency
-                    # idx = np.argmin(np.abs(f - 6000))
-                    # spec = spec[:idx, :]
-                    
-            
-                    #spec = np.log(spec)
-                    #maxspec, minspec = np.log(TEMP_HIGH), np.log(TEMP_LOW)
-                    maxspec, minspec = TEMP_HIGH, -TEMP_HIGH
-
-                    # Perform the interpolation twice, producing two separate images that get combined at the end based on the mask
-                    positive_mask = spec >= 0
-                    # Positive corresponding to regions where mic 1 (right side) is louder
-                    # Here, the min is treated as 0, so it is excluded
-                    inter_blue = spec * (blue_color - white_color) / maxspec + white_color
-
-                    # Here the min is treated as -TEMP_HIGH and the max is 0
-                    inter_red = (spec - minspec) * (white_color - red_color) / (0 - minspec) + red_color
-
-                    # Combine them by adding only the portions where the mask is active
-                    blue_positive = (inter_blue * positive_mask)
-                    red_negative = (inter_red * ~positive_mask)
-                    combined_frame = blue_positive + red_negative
-
-                    print('inter blue min', np.min(blue_positive))
-                    print('inter blue max', np.max(blue_positive))
-
-                    print('inter red min', np.min(red_negative))
-                    print('inter red max', np.max(red_negative))
-                    #print(np.min(combined_frame))
-                    #print(np.max(combined_frame))
-                    combined_frame[combined_frame < 0] = 0
-                    combined_frame[combined_frame > 255] = 255
-                    # The reversal of the 0 axis is necessary here because opencv uses matrix style indexing
-                    combined_frame = combined_frame.astype(np.uint8)[::-1, :]
-
-                    mic_deque.append(combined_frame)
-                    complete_image = np.ascontiguousarray(np.concatenate(list(mic_deque), axis=1), dtype=np.uint8)
-
-                    stop_calc = time.time()
-                    duration_text = '{:.2f}ms'.format(1000 * (stop_calc - start_calc))
+                    calc_duration = time.time() - start_calc
+                    duration_text = '{:.2f}ms'.format(1000 * calc_duration)
                     
                     cv2.putText(
                         complete_image,
@@ -338,7 +349,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                         cv2.FONT_HERSHEY_SIMPLEX,
                         1,
                         (255, 255, 255),
-                        1
+                        2
                     )
                     cv2.imshow(window_names['mic'], complete_image)
                     cv2.waitKey(1)
@@ -363,6 +374,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         except Exception:
             pass
     cv2.destroyAllWindows()
+    cv2.waitKey(1)
     mic_proc.join()
     if dispenser_interval is not None:
         feeder_proc.join()
