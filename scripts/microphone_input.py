@@ -31,19 +31,26 @@ class mic_data_writer():
         # TODO: Change filename format, re-add filename format function
         self.target_num_samples = int(epoch_length * 60 * sample_rate)
         self.total_num_samples = int(total_length * 60 * sample_rate)
+
         self.num_microphones = num_microphones
+        
         self.directory = directory
         self.enforced_filename = enforced_filename
         self.array_labels = identity_list
+        
         self.infinite = infinite
         self.file_counter = 0
         self.present_num_samples = 0
         self.no_epoch_num_samples = 0
+        
         self.ephys_rising_edge = 0
         self.saved_rising = False
         self.ephys_falling_edge = 0
         self.saved_falling = False
+        
         self.cam_accumulator = 0
+        self.
+        
         self.current_file = None
         self.generate_new_file()
 
@@ -177,6 +184,14 @@ class mic_data_writer():
             expectedrows=2
         )
 
+        self.audio_array = self.current_file.create_earray(
+            self.current_file.root,
+            'audio_onset',
+            int_atom,
+            (0, 2),  # Saves the falling edge and the length of the pulse in ms
+            expectedrows=30
+        )
+
         # Update necessary values
         self.file_counter += 1
         self.present_num_samples = 0
@@ -213,13 +228,30 @@ def record_data(task_obj, data_writer, fft_queue):
         else:
             data_writer.increment_ephys_trigger(data.shape[1], rising=False)
 
+    # Camera rising edge stuff
     cam_rising = np.flatnonzero((data[-2,1:] > 1) & (data[-2,:-1] < 1)) + 1 + data_writer.cam_accumulator
     if len(cam_rising) > 0:
         data_writer.write_pulses(cam_rising)
-    data_writer.increment_cam_accumulator(data.shape[1])
+
+    '''
+    # Audio rising and falling edge stuff
+    audio_rising = np.flatnonzero((data[-3, :-1] < 3) & (data[-3, 1:] >= 3)) + data_writer.cam_accumulator
+    audio_falling = np.flatnonzero((data[-3, :-1] >= 3) & (data[-3, 1:] < 3)) + data_writer.cam_accumulator
+
+    # Check for edge cases
+    # Case 1: the rising edge is cut off, so the first element of the frame is >= 3
+    if data[-3, 0] >= 3:
+        audio_rising = np.insert(audio_rising, 0, data_writer.cam_accumulator)
+    # Case 2: the falling edge is cut off, so it appears in the next frame
+    if len(audio_rising) > len(audio_falling):
+        data_writer.temp_rising = audio_rising[-1]
+        audio_rising = audio_rising[:-1]
+    else:
+        data_writer.temp_rising = None
+    '''
     
+    data_writer.increment_cam_accumulator(data.shape[1])
     data_writer.write(data[:data_writer.num_microphones])
-    #data_writer.write(np.concatenate((data[:-2], np.reshape(data[-1], (1, -1))), axis=0))  # Exclude the channel used for trigger detection
     if fft_queue is not None:
         try:
             # Ensure the input has more than one dimension so the output doesn't end up scalar
@@ -258,22 +290,26 @@ class MicrophoneRecorder:
         self.microphone_task.close()
 
 
-def record(directory, filename, acq_started, acq_start_time, port_list, name_list, duration, epoch_len, fft_queue, hsw_ttl_port, cam_ttl_port):  # TODO: Add parameters to this function (microphone channels, sample rate and other constants, file length)
+def record(directory, filename, acq_started, acq_start_time, port_list, name_list, duration, epoch_len, fft_queue, audio_ttl_port, hsw_ttl_port, cam_ttl_port):
     task = nidaq.Task()
     # The following line allows each file in the sequence to have its own start time in its name
     # fname_generator = lambda : 'mic_{}.h5'.format(datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f'))
     # fname_generator = lambda : 'mic_{}.h5'.format(filename)
 
-    
+
     # Create a voltage/microphone channel for every microphone
     for port, name in zip(port_list, name_list):
         task.ai_channels.add_ai_voltage_chan(port,
             name_to_assign_to_channel=name)
 
+
+    # One for the audio onset ttl
+    task.ai_channels.add_ai_voltage_chan(audio_ttl_port, 'audio_ttl_port')
     # One for the cameras, will hold the -2 index
     task.ai_channels.add_ai_voltage_chan(cam_ttl_port, 'cam_ttl_port')
     # One for the ttl port as well
     task.ai_channels.add_ai_voltage_chan(hsw_ttl_port, 'hsw_ttl_input')
+    
     
     # Configure the timing for this task
     # Samples per channel is set to only 5 second's worth of samples to prevent
