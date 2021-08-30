@@ -21,10 +21,11 @@ import scipy.signal
 import tqdm
 
 from scripts import microphone_input, scheduled_feeding, video_acquisition
+from scripts.config import constants as config
 
 
-NUM_MICROPHONES = 2
-DATA_DIR = 'acquired_data'
+NUM_MICROPHONES = config['num_microphones']
+DATA_DIR = config['data_directory']
 
 
 def camera_process(acq_enabled, acq_start_time, epoch_len, num_epochs, param_dict):
@@ -54,12 +55,14 @@ def create_cv_windows(window_names):
 
 
 def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration, epoch_len, cam_queues, framerate=30):
-    camera_params = (
+    a_enabled, b_enabled = config['cam_a_enabled'], config['cam_b_enabled']
+    cam_port = config['camera_ctr_port']
+    camera_params = [
         {
             'root_directory': directory,
             'acq_enabled': acq_enabled,
-            'camera_serial':  video_acquisition.FLIRCamera.CAMERA_A_SERIAL,
-            'counter_port': u'Dev1/ctr1',
+            'camera_serial':  config['camera_a_serial'],
+            'counter_port': cam_port if a_enabled else None,  # Ensure that the port only belongs to one camera object
             'port_name': 'cam_a',
             'frame_target': epoch_len * framerate,
             'framerate': framerate,
@@ -70,8 +73,8 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
         {
             'root_directory': directory,
             'acq_enabled': acq_enabled,
-            'camera_serial':  video_acquisition.FLIRCamera.CAMERA_B_SERIAL,
-            'counter_port': None,
+            'camera_serial':  config['camera_b_serial'],
+            'counter_port': cam_port if not a_enabled else None,
             'port_name': 'cam_b',
             'frame_target': epoch_len * framerate,
             'framerate': framerate,
@@ -79,7 +82,13 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
             'use_queue': cam_queues[1],
             'enforce_filename': filename
         },
-    )
+    ]
+
+    # Filter out the disabled cameras
+    camera_params = [bound[0] for bound in zip(camera_params, (a_enabled, b_enabled)) if bound[1]]
+    if not camera_params:
+        return  # In this case, both cameras are disabled
+
     # Since objects can't be transported across processes, the camera objects have to be created independently in its own process
     camera_names = [p['port_name'] for p in camera_params]
     num_epochs = duration // epoch_len
@@ -158,27 +167,27 @@ def spec_demo():
 def calc_spec_frame_segment(left_audio, right_audio, diff_scaling_factor=1):
     _, _, lspec = scipy.signal.spectrogram(
         left_audio,
-        fs=microphone_input.SAMPLE_RATE,
-        nfft=512,
-        noverlap=0,
-        nperseg=512
+        fs=config['microphone_sample_rate'],
+        nfft=config['spectrogram_nfft'],
+        noverlap=config['spectrogram_noverlap'],
+        nperseg=config['spectrogram_nfft']
     )
 
     _, _, rspec = scipy.signal.spectrogram(
         right_audio,
-        fs=microphone_input.SAMPLE_RATE,
-        nfft=512,
-        noverlap=0,
-        nperseg=512
+        fs=config['microphone_sample_rate'],
+        nfft=config['spectrogram_nfft'],
+        noverlap=config['spectrogram_noverlap'],
+        nperseg=config['spectrogram_nfft']
     )
 
-    rspec /= 1.85  # TEMPORARY: Account for the inflated readings from the right microphone
+    # TEMPORARY: Account for the inflated readings from the right microphone
+    rspec *= config['spectrogram_rmic_correction_factor']
 
-    # If these get changed in the future, note that they are enterred here in BGR order, not RGB
-    black_color = np.array([0, 0, 0]).reshape((1, 1, 3))
-    white_color = np.array([255, 255, 255]).reshape((1, 1, 3))
-    red_color = np.array([87, 66, 206]).reshape((1, 1, 3))
-    blue_color = np.array([218, 214, 109]).reshape((1, 1, 3))
+    black_color = config['spectrogram_black_color']
+    white_color = config['spectrogram_white_color']
+    red_color = config['spectrogram_red_color']
+    blue_color = config['spectrogram_blue_color']
 
     # Compute 2 separate images:
     # One containing the average (for maintaining the baseline in the case where the signals are equally powerful on both sides)
@@ -188,10 +197,9 @@ def calc_spec_frame_segment(left_audio, right_audio, diff_scaling_factor=1):
     avg = ((rspec + lspec) / 2)[:, :, np.newaxis]
     diff = ((rspec - lspec) * diff_scaling_factor)[:, :, np.newaxis]
 
-    # Predetermined scaling constants found by taking the 10% and 90% quantiles over a 60 second interval
-    minavg, maxavg = 90e-11, 1000e-11
+    minavg, maxavg = config['spectrogram_lower_cutoff'], config['spectrogram_upper_cutoff']
     # This is more arbitrary: the minimum power difference between the two mics for the signals to be differentiated between the two
-    diff_inner_thresh = 450e-11
+    diff_inner_thresh = config['spectrogram_mic_difference_thresh']
     
     # Truncate the average and diff arrays with these value to prevent the final image from underflowing or overflowing
     avg[avg > maxavg] = maxavg
@@ -241,7 +249,8 @@ def calc_spec_frame_segment(left_audio, right_audio, diff_scaling_factor=1):
 
 def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None, spec_queue=None, send_sync=True):
     # First make the directory to hold all the data
-    start_time_dt = datetime.datetime.now() + datetime.timedelta(seconds=10)
+    start_time_dt = datetime.datetime.now() + datetime.timedelta(seconds=config['acquisition_startup_delay'])
+    print('Acquisition beginning in {} seconds.'.format(config['acquisition_startup_delay']))
     script_start_time = start_time_dt.strftime('%Y_%m_%d_%H_%M_%S_%f')
     if suffix is not None:
         folder_name = '{}_{}'.format(script_start_time, suffix)
@@ -266,12 +275,19 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         mic_queue = manager.Queue()
         mic_deque = deque(maxlen=20)
         # cam_queue = None
-        cam_a_queue, cam_b_queue = None, manager.Queue()
+        cam_a_queue = manager.Queue() if config['cam_a_enabled'] and config['cam_a_display_enabled'] else None
+        cam_b_queue = manager.Queue() if config['cam_b_enabled'] and config['cam_b_display_enabled'] else None
         window_names = {
-            # 'a': 'Camera A',
-            'b': 'Camera B',
-            'mic': 'Spectrogram (Right side blue, left side red)'
+            'a': config['cam_a_window_name'],
+            'b': config['cam_b_window_name'],
+            'mic': config['spectrogram_window_name']
         }
+
+        # Don't show windows that are disabled in config:
+        if not config['cam_a_display_enabled']:
+            del window_names['a']
+        if not config['cam_b_display_enabled']:
+            del window_names['b']
 
         create_cv_windows(window_names.values())
 
@@ -279,20 +295,39 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         ai_names = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
         mic_proc = Process(
                 target=microphone_input.record,
-                args=(subdir, script_start_time, acq_started, acq_start_time, ai_ports, ai_names, duration, epoch_len, mic_queue, u'Dev1/ai7', u'Dev1/ai6'))
+                args=(subdir,
+                    script_start_time,
+                    acq_started,
+                    acq_start_time,
+                    ai_ports,
+                    ai_names,
+                    duration,
+                    epoch_len,
+                    mic_queue,
+                    config['wm_trig_ai_port'],
+                    config['cam_output_signal_ai_port']))
         mic_proc.start()
 
         if send_sync:
             # Begin sending sync signal
             co_task = ni.Task()
-            co_task.co_channels.add_co_pulse_chan_freq('Dev1/ctr0', 'counter0', freq=125000)
+            co_task.co_channels.add_co_pulse_chan_freq(config['wm_sync_signal_port'], 'wm_sync', freq=config['wm_sync_signal_frequency'])
             #co_task.co_channels.add_co_pulse_chan_freq('Dev1/ctr0', 'counter0', freq=12206.5)
             co_task.timing.cfg_implicit_timing(sample_mode=constants.AcquisitionType.CONTINUOUS)
             co_task.start()
 
 
         # Commented out the camera thread here (Aramis, 2021-07-30, 14:12): 
-        cam_thread = threading.Thread(target=multi_epoch_demo, args=(subdir, script_start_time, acq_started, acq_start_time, duration, epoch_len, (cam_a_queue, cam_b_queue)))
+        cam_thread = threading.Thread(
+            target=multi_epoch_demo,
+            args=(subdir,
+                script_start_time,
+                acq_started,
+                acq_start_time,
+                duration,
+                epoch_len,
+                (cam_a_queue, cam_b_queue),
+                config['camera_framerate']))
         cam_thread.start()
 
         print()
@@ -304,7 +339,10 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
 
         def sigint_handler(sig, frame):
             print('Attempting to stop acquisition')
-            acq_started.value = False
+            try:
+                acq_started.value = False
+            except Exception:
+                pass
             time.sleep(1)
             raise KeyboardInterrupt
 
@@ -314,21 +352,27 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         start = time.time()
         last_printed = 0
         try:
-            # bar_format = 'Timer|{bar}|{elapsed}/{remaining}'
-            bar_format = 'Timer|{elapsed}'
-            #for i in tqdm.tqdm(range(duration*60), bar_format=bar_format):
             while time.time() - start < duration:
-                # if time.time() - start > duration:
-                #    break
                 # Check for camera frame
-                try:
-                    image = cam_b_queue.get()
-                    cv2.imshow(window_names['b'], image)
-                    cv2.waitKey(1)
-                except Empty:
-                    pass
-                except Exception as e:
-                    print(e)
+                if cam_a_queue is not None:
+                    try:
+                        image = cam_a_queue.get()
+                        cv2.imshow(window_names['a'], image)
+                        cv2.waitKey(1)
+                    except Empty:
+                        pass
+                    except Exception as e:
+                        print(e)
+
+                if cam_b_queue is not None:
+                    try:
+                        image = cam_b_queue.get()
+                        cv2.imshow(window_names['b'], image)
+                        cv2.waitKey(1)
+                    except Empty:
+                        pass
+                    except Exception as e:
+                        print(e)
 
                 # Check for microphone data and display it
                 try:

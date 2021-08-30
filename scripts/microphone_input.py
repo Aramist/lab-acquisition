@@ -13,10 +13,12 @@ from nidaqmx.constants import AcquisitionType
 import numpy as np
 import tables
 
+from scripts.config import constants
+
 
 # Local constants
-SAMPLE_RATE = 125000  # Hz
-READ_CYCLE_PERIOD = 0.25  # Amount of time (sec) between each read from the buffer
+SAMPLE_RATE = constants['microphone_sample_rate']  # Hz
+READ_CYCLE_PERIOD = constants['microphone_data_retrieval_interval']  # Amount of time (sec) between each read from the buffer
 SAMPLE_INTERVAL = int(SAMPLE_RATE * READ_CYCLE_PERIOD)
 
 
@@ -49,7 +51,6 @@ class mic_data_writer():
         self.saved_falling = False
         
         self.cam_accumulator = 0
-        self.
         
         self.current_file = None
         self.generate_new_file()
@@ -138,16 +139,6 @@ class mic_data_writer():
             self.enforced_filename = None
 
         self.current_file = tables.open_file(filepath, 'w')
-        # Create a small array logging the microphones used in this reading:
-        """
-        string_atom = tables.StringAtom(itemsize=32)
-        identifiers = self.current_file.create_array(
-            self.current_file.root,
-            'microphones_used',
-            string_atom,
-            (2,))
-        identifiers[:] = self.identity_list
-        """
 
         # Create the analog_channels group to keep everything organized
         ai_group = self.current_file.create_group(self.current_file.root, 'ai_channels')
@@ -290,7 +281,7 @@ class MicrophoneRecorder:
         self.microphone_task.close()
 
 
-def record(directory, filename, acq_started, acq_start_time, port_list, name_list, duration, epoch_len, fft_queue, audio_ttl_port, hsw_ttl_port, cam_ttl_port):
+def record(directory, filename, acq_started, acq_start_time, port_list, name_list, duration, epoch_len, fft_queue, hsw_ttl_port, cam_ttl_port):
     task = nidaq.Task()
     # The following line allows each file in the sequence to have its own start time in its name
     # fname_generator = lambda : 'mic_{}.h5'.format(datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f'))
@@ -302,9 +293,6 @@ def record(directory, filename, acq_started, acq_start_time, port_list, name_lis
         task.ai_channels.add_ai_voltage_chan(port,
             name_to_assign_to_channel=name)
 
-
-    # One for the audio onset ttl
-    task.ai_channels.add_ai_voltage_chan(audio_ttl_port, 'audio_ttl_port')
     # One for the cameras, will hold the -2 index
     task.ai_channels.add_ai_voltage_chan(cam_ttl_port, 'cam_ttl_port')
     # One for the ttl port as well
@@ -360,7 +348,3 @@ def record(directory, filename, acq_started, acq_start_time, port_list, name_lis
     task.stop()
     data_writer.close()
     task.close()
-
-
-if __name__ == '__main__':
-    record('mic_data', [u'Dev1/ai0'], [u'mic0'], (60000 // 200) + 30, None, u'Dev1/ai2')

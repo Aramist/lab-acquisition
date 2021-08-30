@@ -9,14 +9,9 @@ import cv2
 import numpy as np
 import PySpin as spin
 
-if 'scripts' in __name__:
-    from scripts import camera_ttl
-else:
-    import camera_ttl
+from scripts import camera_ttl
+from scripts.config import constants as config
     
-
-FILENAME_DATE_FORMAT = '%Y_%m_%d_%H_%M_%S_%f'
-CALCULATED_FRAMERATE = 29.9998066833
 
 def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, K, D, image_queue, save_ts_fn, counter):
     while still_active():
@@ -54,11 +49,7 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
 
 
 class FLIRCamera:
-    # Static variables for our cameras' serial numbers:
-    CAMERA_A_SERIAL = '19390113'
-    CAMERA_B_SERIAL = '19413860'
-
-    def __init__(self, root_directory, acq_enabled, camera_serial, counter_port, port_name, frame_target, framerate=CALCULATED_FRAMERATE, period_extension=0, dimensions=(640,512), calibration_param_path=None, use_queue=None, enforce_filename=None):
+    def __init__(self, root_directory, acq_enabled, camera_serial, counter_port, port_name, frame_target, framerate=config['camera_framerate'], period_extension=0, dimensions=(640,512), calibration_param_path=None, use_queue=None, enforce_filename=None):
         self.framerate = framerate
         self.serial = camera_serial
         self.dimensions = dimensions
@@ -133,7 +124,7 @@ class FLIRCamera:
     def create_video_file(self):
         start_time = datetime.datetime.now()
         if self.enforced_filename is None:
-            start_time_str = start_time.strftime(FILENAME_DATE_FORMAT)
+            start_time_str = start_time.strftime('%Y_%m_%d_%H_%M_%S_%f')
         else:
             start_time_str = self.enforced_filename
         if not path.exists(self.base_dir):
@@ -208,30 +199,3 @@ class FLIRCamera:
                 self.release()
         except Exception as e:
             print(e)
-
-
-def demo(capture_dir):
-    print('Running video_acquisition.py demo')
-    with FLIRCamera(capture_dir,
-            framerate=30,
-            camera_serial=FLIRCamera.CAMERA_B_SERIAL,
-            counter_port=u'Dev1/ctr1',
-            port_name=u'camera_b') as cam:
-        #    calibration_param_path='camera_params/cam_a') as cam:
-        cam.start_capture()
-        """
-        start_time = time.time()
-        while time.time() - start_time < 60:
-            try:
-                cv2.imshow('image', cam.queue.get(timeout=0.03))
-                cv2.waitKey(1)
-            except Exception:
-                continue
-        """
-        time.sleep(120)
-        cam.end_capture()
-    print('Done')
-
- 
-if __name__ == '__main__':
-    demo('captured_frames')
