@@ -51,6 +51,7 @@ class mic_data_writer():
         self.saved_falling = False
         
         self.cam_accumulator = 0
+        self.temp_rising = None
         
         self.current_file = None
         self.generate_new_file()
@@ -117,6 +118,10 @@ class mic_data_writer():
     def write_pulses(self, data):
         if self.cam_array is not None:
             self.cam_array.append(data)
+
+    def write_audio_pulses(self, data):
+        if self.audio_array is not None:
+            self.audio_array.append(data)
 
     def generate_new_file(self):
         # None check to prevent errors on creation of the very first file
@@ -192,7 +197,7 @@ class mic_data_writer():
 def record_data(task_obj, data_writer, fft_queue):
     data = np.array(task_obj.read(
         number_of_samples_per_channel=READ_ALL_AVAILABLE,
-        timeout=0)).reshape((data_writer.num_microphones + 2, -1))  # +2 for both of the ttl-reading channels
+        timeout=0)).reshape((data_writer.num_microphones + 3, -1))  # +3 for all of the ttl-reading channels
     trigger_location = 0
     if np.max(data[-1]) > 3 and not data_writer.saved_rising:
         # The ttl trigger was hit
@@ -224,22 +229,30 @@ def record_data(task_obj, data_writer, fft_queue):
     if len(cam_rising) > 0:
         data_writer.write_pulses(cam_rising)
 
-    '''
+    
     # Audio rising and falling edge stuff
-    audio_rising = np.flatnonzero((data[-3, :-1] < 3) & (data[-3, 1:] >= 3)) + data_writer.cam_accumulator
-    audio_falling = np.flatnonzero((data[-3, :-1] >= 3) & (data[-3, 1:] < 3)) + data_writer.cam_accumulator
+    audio_rising = np.flatnonzero((data[-3, :-1] < 2) & (data[-3, 1:] > 2)) + data_writer.cam_accumulator
+    audio_falling = np.flatnonzero((data[-3, :-1] > 2) & (data[-3, 1:] < 2)) + data_writer.cam_accumulator
+
+    if data_writer.temp_rising is not None:
+        audio_rising = np.insert(audio_rising, 0, data_writer.temp_rising)
+        data_writer.temp_rising = None
 
     # Check for edge cases
-    # Case 1: the rising edge is cut off, so the first element of the frame is >= 3
-    if data[-3, 0] >= 3:
-        audio_rising = np.insert(audio_rising, 0, data_writer.cam_accumulator)
-    # Case 2: the falling edge is cut off, so it appears in the next frame
-    if len(audio_rising) > len(audio_falling):
+    # Case 1: the rising edge is cut off and there is no temp rising, so n_falling > n_rising
+    if len(audio_falling) > len(audio_rising):
+        audio_falling = audio_falling[1:]
+    # Case 2: the falling edge is cut off, so it appears in the next frame and  n_rising > n_falling
+    elif len(audio_rising) > len(audio_falling):
         data_writer.temp_rising = audio_rising[-1]
         audio_rising = audio_rising[:-1]
     else:
+    # Case 3: the wave is fully contained in this block, wipe the rising edge
         data_writer.temp_rising = None
-    '''
+    
+    if len(audio_rising) == len(audio_falling) and len(audio_rising) > 0:
+        np_pulses = np.array([[falling, (falling - rising) * 1000 // SAMPLE_RATE] for rising, falling in zip(audio_rising, audio_falling)], dtype=int)
+        data_writer.write_audio_pulses(np_pulses)
     
     data_writer.increment_cam_accumulator(data.shape[1])
     data_writer.write(data[:data_writer.num_microphones])
@@ -281,22 +294,23 @@ class MicrophoneRecorder:
         self.microphone_task.close()
 
 
-def record(directory, filename, acq_started, acq_start_time, port_list, name_list, duration, epoch_len, fft_queue, hsw_ttl_port, cam_ttl_port):
+def record(directory, filename, acq_started, acq_start_time, port_list, name_list, duration, epoch_len, fft_queue, audio_ttl_port, cam_ttl_port, hsw_ttl_port):
     task = nidaq.Task()
     # The following line allows each file in the sequence to have its own start time in its name
     # fname_generator = lambda : 'mic_{}.h5'.format(datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f'))
     # fname_generator = lambda : 'mic_{}.h5'.format(filename)
-
 
     # Create a voltage/microphone channel for every microphone
     for port, name in zip(port_list, name_list):
         task.ai_channels.add_ai_voltage_chan(port,
             name_to_assign_to_channel=name)
 
+    # Hold the -3 index for audio ttl signals
+    task.ai_channels.add_ai_voltage_chan(audio_ttl_port, 'audio_ttl_port')
     # One for the cameras, will hold the -2 index
     task.ai_channels.add_ai_voltage_chan(cam_ttl_port, 'cam_ttl_port')
     # One for the ttl port as well
-    task.ai_channels.add_ai_voltage_chan(hsw_ttl_port, 'hsw_ttl_input')
+    task.ai_channels.add_ai_voltage_chan(hsw_ttl_port, 'hsw_ttl_port')
     
     
     # Configure the timing for this task
@@ -339,6 +353,7 @@ def record(directory, filename, acq_started, acq_start_time, port_list, name_lis
                     fft_queue.put(data)
             except queue.Empty:
                 continue
+
 
     except KeyboardInterrupt:
         print('Microphone_input: attempting to close task')

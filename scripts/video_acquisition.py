@@ -77,6 +77,7 @@ class FLIRCamera:
                 D_path = path.join(calibration_param_path, 'D.npy')
                 self.K_matrix = np.load(K_path)
                 self.D_matrix = np.load(D_path)
+                print(self.K_matrix, self.D_matrix)
             except:
                 print('Failed to load calibration parameters for {}'.format(self.name))
 

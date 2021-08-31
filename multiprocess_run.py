@@ -67,6 +67,7 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
             'frame_target': epoch_len * framerate,
             'framerate': framerate,
             'period_extension': 0,
+            'calibration_param_path': config['cam_a_calibration_path'],
             'use_queue': cam_queues[0],
             'enforce_filename': filename
         },
@@ -79,6 +80,7 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
             'frame_target': epoch_len * framerate,
             'framerate': framerate,
             'period_extension': 0,
+            'calibration_param_path': config['cam_b_calibration_path'],
             'use_queue': cam_queues[1],
             'enforce_filename': filename
         },
@@ -260,7 +262,6 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
     if not path.exists(subdir):
         os.mkdir(subdir)
 
-
     if dispenser_interval is not None:
         dio_ports = ('Dev1/port0/line7',)
         stop_dt = datetime.datetime.now() + datetime.timedelta(seconds=duration)
@@ -272,8 +273,8 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         acq_start_time = manager.Value(c_double, start_time_dt.timestamp())
 
         # mic_queue = None
-        mic_queue = manager.Queue()
-        mic_deque = deque(maxlen=20)
+        mic_queue = manager.Queue() if config['spectrogram_display_enabled'] else None
+        mic_deque = deque(maxlen=config['spectrogram_deque_size'])
         # cam_queue = None
         cam_a_queue = manager.Queue() if config['cam_a_enabled'] and config['cam_a_display_enabled'] else None
         cam_b_queue = manager.Queue() if config['cam_b_enabled'] and config['cam_b_display_enabled'] else None
@@ -288,6 +289,8 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
             del window_names['a']
         if not config['cam_b_display_enabled']:
             del window_names['b']
+        if not config['spectrogram_display_enabled']:
+            del window_names['mic']
 
         create_cv_windows(window_names.values())
 
@@ -304,8 +307,9 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                     duration,
                     epoch_len,
                     mic_queue,
-                    config['wm_trig_ai_port'],
-                    config['cam_output_signal_ai_port']))
+                    config['audio_ttl_ai_port'],
+                    config['cam_output_signal_ai_port'],
+                    config['wm_trig_ai_port']))
         mic_proc.start()
 
         if send_sync:
@@ -334,8 +338,6 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         print('Waiting for everything to initialize')
         acq_started.value = True
 
-        while time.time() < start_time_dt.timestamp():
-            pass
 
         def sigint_handler(sig, frame):
             print('Attempting to stop acquisition')
@@ -348,7 +350,9 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
 
         signal.signal(signal.SIGINT, sigint_handler)
 
-        # if spec_queue is None:
+        while time.time() < start_time_dt.timestamp():
+            pass
+
         start = time.time()
         last_printed = 0
         try:
@@ -356,7 +360,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                 # Check for camera frame
                 if cam_a_queue is not None:
                     try:
-                        image = cam_a_queue.get()
+                        image = cam_a_queue.get(timeout=0)
                         cv2.imshow(window_names['a'], image)
                         cv2.waitKey(1)
                     except Empty:
@@ -366,7 +370,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
 
                 if cam_b_queue is not None:
                     try:
-                        image = cam_b_queue.get()
+                        image = cam_b_queue.get(timeout=0)
                         cv2.imshow(window_names['b'], image)
                         cv2.waitKey(1)
                     except Empty:
@@ -375,38 +379,45 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                         print(e)
 
                 # Check for microphone data and display it
-                try:
-                    start_calc = time.time()
-                    
-                    mic_data = mic_queue.get(timeout=0)
-                    color_frame = calc_spec_frame_segment(mic_data[0], mic_data[1], diff_scaling_factor=2)
-                    mic_deque.append(color_frame)
-                    complete_image = np.ascontiguousarray(np.concatenate(mic_deque, axis=1), dtype=np.uint8)
-                    
-                    calc_duration = time.time() - start_calc
-                    duration_text = '{:.2f}ms'.format(1000 * calc_duration)
-                    
-                    cv2.putText(
-                        complete_image,
-                        duration_text,
-                        (50, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1,
-                        (255, 255, 255),
-                        2
-                    )
-                    cv2.imshow(window_names['mic'], complete_image)
-                    cv2.waitKey(1)
-                except Empty:
-                    pass
-                except Exception as e:
-                    print(e)
+                if config['spectrogram_display_enabled']:
+                    try:
+                        start_calc = time.time()
+                        
+                        mic_data = mic_queue.get(timeout=0)
+                        color_frame = calc_spec_frame_segment(mic_data[0], mic_data[1], diff_scaling_factor=2)
+                        mic_deque.append(color_frame)
+                        complete_image = np.ascontiguousarray(np.concatenate(mic_deque, axis=1), dtype=np.uint8)
+                        
+                        calc_duration = time.time() - start_calc
+                        duration_text = '{:.2f}ms'.format(1000 * calc_duration)
+                        
+                        cv2.putText(
+                            complete_image,
+                            duration_text,
+                            (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            1,
+                            (255, 255, 255),
+                            2
+                        )
+                        cv2.imshow(window_names['mic'], complete_image)
+                        cv2.waitKey(1)
+                    except Empty:
+                        pass
+                    except Exception as e:
+                        print(e)
 
                 # Doesn't really need to sleep because processing the frames for the display takes so much time
                 # time.sleep(1/60)
                 elapsed = int(time.time() - start)
                 if elapsed >= last_printed + 5:
-                    print('Timer: {}:{:>02}'.format(elapsed // 60, elapsed % 60))  # Minutes and seconds
+                    hours = elapsed // 3600
+                    minutes = elapsed // 60 - 60 * hours
+                    seconds = elapsed % 60
+                    if hours > 0:
+                        print('Timer: {}:{:>02}:{:>02}'.format(hours, minutes, seconds))
+                    else:
+                        print('Timer: {}:{:>02}'.format(minutes, seconds))
                     last_printed = elapsed
         except KeyboardInterrupt:
             pass
@@ -439,6 +450,10 @@ def command_line_demo():
     parser.add_argument('--dispenserinterval', help='How often the dispensers should be activated (in minutes)', type=int)
     parser.add_argument('--suffix', help='A suffix for the names of the files produced in this session', type=str)
     args = parser.parse_args()
+
+    if args.epoch_len > 30:
+        print('Keep the epoch len below 30 minutes.')
+        return
 
     duration = int(60 * args.duration)
     epoch_len = int(60 * args.epoch_len)
