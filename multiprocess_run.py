@@ -166,7 +166,26 @@ def spec_demo():
 """
 
 
-def calc_spec_frame_segment(left_audio, right_audio, diff_scaling_factor=1):
+def calc_spec_frame_segment_mono(all_audio):
+    avg_audio = np.mean(all_audio, axis=0)
+
+    _, _, spec = scipy.signal.spectrogram(
+        avg_audio,
+        fs=config['microphone_sample_rate'],
+        nfft=config['spectrogram_nfft'],
+        noverlap=config['spectrogram_noverlap'],
+        nperseg=config['spectrogram_nfft']
+    )
+
+    minavg, maxavg = config['spectrogram_lower_cutoff'], config['spectrogram_upper_cutoff']
+
+    spec = np.clip(spec, minavg, maxavg)
+    spec = (spec - minavg) * 255 / (maxavg - minavg)
+    return spec[::-1].astype(np.uint8)
+
+
+
+def calc_spec_frame_segment_color(left_audio, right_audio, diff_scaling_factor=1):
     _, _, lspec = scipy.signal.spectrogram(
         left_audio,
         fs=config['microphone_sample_rate'],
@@ -250,9 +269,11 @@ def calc_spec_frame_segment(left_audio, right_audio, diff_scaling_factor=1):
 
 
 def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None, spec_queue=None, send_sync=True):
+    spectrogram_colored = False
     # First make the directory to hold all the data
-    start_time_dt = datetime.datetime.now() + datetime.timedelta(seconds=config['acquisition_startup_delay'])
-    print('Acquisition beginning in {} seconds.'.format(config['acquisition_startup_delay']))
+    start_time_dt = datetime.datetime.now() + datetime.timedelta(seconds=6)
+    # n seconds between running multiprocess_run and acquisition starting. Gives everything time to setup
+    print('Acquisition beginning in 6 seconds.')
     script_start_time = start_time_dt.strftime('%Y_%m_%d_%H_%M_%S_%f')
     if suffix is not None:
         folder_name = '{}_{}'.format(script_start_time, suffix)
@@ -357,6 +378,19 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         last_printed = 0
         try:
             while time.time() - start < duration:
+                # Update timer
+                elapsed = int(time.time() - start)
+                hours = elapsed // 3600
+                minutes = elapsed // 60 - 60 * hours
+                seconds = elapsed % 60
+                if hours > 0:
+                    timer_string = 'Timer: {}:{:>02}:{:>02}'.format(hours, minutes, seconds)
+                else:
+                    timer_string = 'Timer: {}:{:>02}'.format(minutes, seconds)
+                if elapsed >= last_printed + 5:
+                    print(timer_string)
+                    last_printed = elapsed
+
                 # Check for camera frame
                 if cam_a_queue is not None:
                     try:
@@ -384,13 +418,17 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                         start_calc = time.time()
                         
                         mic_data = mic_queue.get(timeout=0)
-                        color_frame = calc_spec_frame_segment(mic_data[0], mic_data[1], diff_scaling_factor=2)
+                        if spectrogram_colored:
+                            color_frame = calc_spec_frame_segment_color(mic_data[0], mic_data[1], diff_scaling_factor=2)
+                        else:
+                            color_frame = calc_spec_frame_segment_mono(mic_data)
+
                         mic_deque.append(color_frame)
                         complete_image = np.ascontiguousarray(np.concatenate(mic_deque, axis=1), dtype=np.uint8)
                         
+                        '''
                         calc_duration = time.time() - start_calc
                         duration_text = '{:.2f}ms'.format(1000 * calc_duration)
-                        
                         cv2.putText(
                             complete_image,
                             duration_text,
@@ -399,6 +437,18 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                             1,
                             (255, 255, 255),
                             2
+                        )'''
+
+                        # Display timer on spectrogram window
+                        text_color = (255, 255, 255) if spectrogram_colored else 255
+                        cv2.putText(
+                            complete_image,
+                            timer_string,
+                            (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            1,
+                            text_color,
+                            2
                         )
                         cv2.imshow(window_names['mic'], complete_image)
                         cv2.waitKey(1)
@@ -406,19 +456,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                         pass
                     except Exception as e:
                         print(e)
-
-                # Doesn't really need to sleep because processing the frames for the display takes so much time
-                # time.sleep(1/60)
-                elapsed = int(time.time() - start)
-                if elapsed >= last_printed + 5:
-                    hours = elapsed // 3600
-                    minutes = elapsed // 60 - 60 * hours
-                    seconds = elapsed % 60
-                    if hours > 0:
-                        print('Timer: {}:{:>02}:{:>02}'.format(hours, minutes, seconds))
-                    else:
-                        print('Timer: {}:{:>02}'.format(minutes, seconds))
-                    last_printed = elapsed
+                
         except KeyboardInterrupt:
             pass
         
