@@ -2,9 +2,9 @@ import numpy as np
 
 
 constants = {
-    'num_microphones': 2,
+    'num_microphones': 4,
     'data_directory': 'acquired_data',
-    'camera_a_serial': '19390113',
+    'camera_a_serial': '19390113', 
     'camera_b_serial': '19413860',
     'camera_ctr_port': 'Dev1/ctr1',
     'camera_framerate': 30,  # Hz/fps
@@ -30,7 +30,7 @@ constants = {
     'spectrogram_noverlap': 0,
     'spectrogram_deque_size': 20,  # 5 seconds worth
     'spectrogram_upper_cutoff': 1000e-11,
-    'spectrogram_lower_cutoff': 90e-11,
+    'spectrogram_lower_cutoff': 10e-20,
     'spectrogram_mic_difference_thresh': 450e-11,
     'spectrogram_window_name': 'Spectrogram (right side blue, left side red)',
 
