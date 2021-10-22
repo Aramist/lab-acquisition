@@ -3,6 +3,8 @@ from collections import deque
 from ctypes import c_bool, c_double
 import datetime
 from functools import partial
+import json
+from math import ceil
 import multiprocessing
 from multiprocessing import Pool, Process, Manager
 import os
@@ -28,7 +30,7 @@ NUM_MICROPHONES = config['num_microphones']
 DATA_DIR = config['data_directory']
 
 
-def camera_process(acq_enabled, acq_start_time, epoch_len, num_epochs, param_dict):
+def camera_process(acq_enabled, acq_start_time, duration, epoch_len, num_epochs, param_dict):
     cam = video_acquisition.FLIRCamera(**param_dict)
 
     while time.time() < acq_start_time.value or not acq_enabled.value:
@@ -93,77 +95,17 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
 
     # Since objects can't be transported across processes, the camera objects have to be created independently in its own process
     camera_names = [p['port_name'] for p in camera_params]
-    num_epochs = duration // epoch_len
+    num_epochs = ceil(duration / epoch_len)
     with Pool(processes=2) as pool:
         print('initializing cameras: {}'.format(str(camera_names)))
         try:
-            pool.map(partial(camera_process, acq_enabled, acq_start_time, epoch_len, num_epochs), camera_params)
+            pool.map(partial(camera_process, acq_enabled, acq_start_time, duration, epoch_len, num_epochs), camera_params)
         except KeyboardInterrupt:
             pass
         except Exception:
             pass
         print('Closing camera processes')
         pool.terminate()
-
-    """All times are expected in seconds"""
-    """
-    num_epochs = duration // epoch_len
-    for iteration in range(num_epochs):
-        print(f'Starting epoch {iteration + 1}/{num_epochs}')
-        run_cameras(directory, acq_enabled, epoch_len)
-    """
-
-"""
-def spec_demo():
-    mic_proc = Process(target=microphone_input.record, args=('mic_data', ai_ports, ai_names, DURATION, mic_data_queue, u'Dev1/ai3'))
-    mic_proc.start()
-
-    cv2.namedWindow('spec', cv2.WINDOW_AUTOSIZE)
-
-    TEMP_HIGH = 2e-9
-    TEMP_LOW = 60e-11
-
-    print('Started mic process')
-
-    start_time = time.time()
-    mic_deque = deque(maxlen=20)  # 10 seconds' worth
-    while time.time() - start_time < DURATION:
-        try:
-            mic_data = mic_data_queue.get(block=True, timeout=0.15)
-        except Empty:
-            continue
-        if len(mic_deque) == 20:
-            mic_deque.popleft()
-        mic_deque.append(mic_data[0])
-        if len(mic_deque) < 20:
-            print(20 - len(mic_deque))
-            # continue
-        data_arr = np.concatenate(list(mic_deque), axis=0)
-        f, t, spec = scipy.signal.spectrogram( \
-            data_arr,
-            fs=microphone_input.SAMPLE_RATE,
-            nfft=1024,
-            noverlap=256,
-            nperseg=1024,
-            scaling='density')
-        # Perform logarithmic scaling to accentuate the smaller signals
-
-        spec[spec < TEMP_LOW] = TEMP_LOW
-        spec[spec > TEMP_HIGH] = TEMP_HIGH
-
-        spec = np.log(spec)
-        maxspec, minspec = np.log(TEMP_HIGH), np.log(TEMP_LOW)
-        # maxspec, minspec = np.max(spec), np.min(spec)
-        # Perform the scaling and convert to int for image viewing
-        # The reversal of the 0 axis is necessary here because opencv uses matrix style indexing
-        # Although this might not need to be conserved after switching to d3
-        spec = ((spec - minspec) * 255 / (maxspec - minspec)).astype(np.uint8)[::-1, :]
-        print(spec.shape)
-        cv2.imshow('spec', spec)
-        cv2.waitKey(1)
-    mic_proc.join()
-    mic_proc.close()
-"""
 
 
 def calc_spec_frame_segment_mono(all_audio):
@@ -225,6 +167,7 @@ def calc_spec_frame_segment_color(left_audio, right_audio, diff_scaling_factor=1
     # Truncate the average and diff arrays with these value to prevent the final image from underflowing or overflowing
     avg[avg > maxavg] = maxavg
     avg[avg < minavg] = minavg
+
     # minavg doesn't work in the same way for diff because it spans the negative numbers. avg is originally non-negative
     diff[diff < -maxavg] = -maxavg
     diff[diff > maxavg] = maxavg
@@ -342,7 +285,6 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
             co_task.start()
 
 
-        # Commented out the camera thread here (Aramis, 2021-07-30, 14:12): 
         cam_thread = threading.Thread(
             target=multi_epoch_demo,
             args=(subdir,
@@ -504,6 +446,8 @@ def command_line_demo():
         suffix = args.suffix
     else:
         suffix = None
+
+    suffix = suffix.strip('_')
 
     begin_acquisition(duration, epoch_len, dispenser_interval, suffix)
 

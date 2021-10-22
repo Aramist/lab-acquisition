@@ -13,7 +13,7 @@ from scripts import camera_ttl
 from scripts.config import constants as config
     
 
-def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, K, D, image_queue, save_ts_fn, counter):
+def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, maps, image_queue, save_ts_fn, counter):
     while still_active():
         try:
             # Remove timeout to prevent thread from hanging after acquisition is stopped.
@@ -27,9 +27,7 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
         cv_img_big = image_bgr.GetData().reshape((2 * dimensions[1], 2 * dimensions[0], 3))
         cv_img = cv2.resize(cv_img_big, dimensions)
         counter()
-        if K is not None and D is not None:
-            new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(K, D, dimensions, np.eye(3), balance=0.5)
-            maps = cv2.initUndistortRectifyMap(K, D, np.eye(3), K, dimensions, cv2.CV_16SC2)
+        if maps is not None:
             cv_img = cv2.remap(cv_img, *maps, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
             # Here 0.5 is the alpha parameter, which determines how many of the original pixels should be kept in the image
         if image_queue is not None:
@@ -43,9 +41,6 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
         except Exception:
             # If this thread is in the middle of a loop when still_active changes, the call to image.release will fail
             pass
-        # Reset timestamp array every 5 minutes to reduce memory consumption. Honestly, is this even major? 30 min = 30 * 60 * 30 * 8 bytes < 0.5MB
-        if len(timestamp_arr) > 30 * 60 * 5:
-            save_ts_fn()
 
 
 class FLIRCamera:
@@ -60,8 +55,7 @@ class FLIRCamera:
         self.name = port_name
         self.period_extension = period_extension
 
-        self.K_matrix = None
-        self.D_matrix = None
+        self.transformation_maps = None
 
         self.frame_target = frame_target
         self.frames_acquired = 0
@@ -75,10 +69,14 @@ class FLIRCamera:
             try:
                 K_path = path.join(calibration_param_path, 'K.npy')
                 D_path = path.join(calibration_param_path, 'D.npy')
-                self.K_matrix = np.load(K_path)
-                self.D_matrix = np.load(D_path)
-                print(self.K_matrix, self.D_matrix)
-            except:
+                # Normalize the K matrix since it was designed for 1280x1024 images but we are using 640x512
+                K = np.load(K_path) / 2
+                K[2, 2] = 1
+                D = np.load(D_path)
+                new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(K, D, dimensions, np.eye(3), balance=0)
+                self.transformation_maps = cv2.fisheye.initUndistortRectifyMap(K, D, np.eye(3), new_K, dimensions, cv2.CV_16SC2)
+            except Exception as e:
+                print(e)
                 print('Failed to load calibration parameters for {}'.format(self.name))
 
 
@@ -164,8 +162,7 @@ class FLIRCamera:
                 self.dimensions,
                 self.video_writer,
                 enabled,
-                self.K_matrix,
-                self.D_matrix,
+                self.transformation_maps,
                 self.queue,
                 self.save_ts_array,
                 self.inc_frame_count))

@@ -57,10 +57,13 @@ def process(img):
         image_points.append(corners_refined)
 
 
+
 if not use_vid:
     num_samples = len(image_paths)
     for image_path in image_paths:
         img = cv2.imread(image_path)
+        sh = img.shape
+        img = cv2.resize(img, (img.shape[1], img.shape[0]))
         process(img)
 else:
     cap = cv2.VideoCapture(vid_path)

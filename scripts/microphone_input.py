@@ -1,6 +1,7 @@
 from collections import deque
 import datetime
 from functools import partial
+import json
 import os
 from os import path
 from multiprocessing import Process
@@ -122,6 +123,7 @@ class mic_data_writer():
     def write_audio_pulses(self, data):
         if self.audio_array is not None:
             self.audio_array.append(data)
+        print(data)
 
     def generate_new_file(self):
         # None check to prevent errors on creation of the very first file
@@ -147,6 +149,11 @@ class mic_data_writer():
 
         # Create the analog_channels group to keep everything organized
         ai_group = self.current_file.create_group(self.current_file.root, 'ai_channels')
+        # NEW (2021-09-21): dump the config dictionary into an attribute of the table
+        self.current_file.create_array(
+            '/',
+            'config',
+            np.array(json.dumps({k: v for k, v in constants.items() if 'color' not in k})))
 
         # Create an expandable array for analog input
         float_atom = tables.Float32Atom()
@@ -160,8 +167,7 @@ class mic_data_writer():
                     channel_name,
                     float_atom,
                     (0,),
-                    expectedrows=self.target_num_samples)
-                )
+                    expectedrows=self.target_num_samples))
 
 
         int_atom = tables.Int32Atom()

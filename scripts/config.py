@@ -3,7 +3,7 @@ import numpy as np
 
 constants = {
     'num_microphones': 4,
-    'data_directory': 'acquired_data',
+    'data_directory': 'D:acquired_data',
     'camera_a_serial': '19390113', 
     'camera_b_serial': '19413860',
     'camera_ctr_port': 'Dev1/ctr1',
@@ -15,7 +15,7 @@ constants = {
     'cam_a_window_name': 'Camera A',
     'cam_b_window_name': 'Camera B',
     'cam_a_calibration_path': None, # for de-fisheye-ing
-    'cam_b_calibration_path': None, # for de-fisheye-ing
+    'cam_b_calibration_path': 'camera_params/cam_a', # for de-fisheye-ing
     'cam_output_signal_ai_port': 'Dev1/ai6',
 
     'microphone_sample_rate': 125000,  # Hz
@@ -38,6 +38,4 @@ constants = {
     'wm_sync_signal_port': 'Dev1/ctr0',
     'wm_trig_ai_port': 'Dev1/ai7',
     'audio_ttl_ai_port': 'Dev1/ai5',
-
-
 }
