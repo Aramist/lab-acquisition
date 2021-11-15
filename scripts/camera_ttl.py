@@ -46,7 +46,7 @@ def example():
     task_b = CameraTTLTask(framerate=30, counter_port=u'Dev1/ctr1', port_name='camera_1')
     task_a.start()
     task_b.start()
-    time.sleep(300)  # Or any other function that blocks the interpreter
+    time.sleep(4000)  # Or any other function that blocks the interpreter
     task_a.stop()
     task_b.stop()
 

@@ -210,9 +210,9 @@ def calc_spec_frame_segment_color(left_audio, right_audio, diff_scaling_factor=1
     return avg_img[::-1]
 
 
-
 def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None, spec_queue=None, send_sync=True):
     spectrogram_colored = False
+    device_name = config['device_name']
     # First make the directory to hold all the data
     start_time_dt = datetime.datetime.now() + datetime.timedelta(seconds=6)
     # n seconds between running multiprocess_run and acquisition starting. Gives everything time to setup
@@ -227,7 +227,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         os.mkdir(subdir)
 
     if dispenser_interval is not None:
-        dio_ports = ('Dev1/port0/line7',)
+        dio_ports = ('{}/port0/line7'.format(device_name),)
         stop_dt = datetime.datetime.now() + datetime.timedelta(seconds=duration)
         feeder_proc = Process(target=scheduled_feeding.feed_regularly, args=(dio_ports, dispenser_interval, False, stop_dt))
         feeder_proc.start()
@@ -257,8 +257,20 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
             del window_names['mic']
 
         create_cv_windows(window_names.values())
+        
+        cam_thread = threading.Thread(
+            target=multi_epoch_demo,
+            args=(subdir,
+                script_start_time,
+                acq_started,
+                acq_start_time,
+                duration,
+                epoch_len,
+                (cam_a_queue, cam_b_queue),
+                config['camera_framerate']))
+        cam_thread.start()
 
-        ai_ports = [u'Dev1/ai{}'.format(i) for i in range(NUM_MICROPHONES)]
+        ai_ports = [u'{}/ai{}'.format(device_name, i) for i in range(NUM_MICROPHONES)]
         ai_names = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
         mic_proc = Process(
                 target=microphone_input.record,
@@ -283,19 +295,6 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
             #co_task.co_channels.add_co_pulse_chan_freq('Dev1/ctr0', 'counter0', freq=12206.5)
             co_task.timing.cfg_implicit_timing(sample_mode=constants.AcquisitionType.CONTINUOUS)
             co_task.start()
-
-
-        cam_thread = threading.Thread(
-            target=multi_epoch_demo,
-            args=(subdir,
-                script_start_time,
-                acq_started,
-                acq_start_time,
-                duration,
-                epoch_len,
-                (cam_a_queue, cam_b_queue),
-                config['camera_framerate']))
-        cam_thread.start()
 
         print()
         print('Waiting for everything to initialize')
@@ -443,11 +442,9 @@ def command_line_demo():
         dispenser_interval = None  # Don't run the dispenser
 
     if args.suffix:
-        suffix = args.suffix
+        suffix = args.suffix.strip('_')
     else:
         suffix = None
-
-    suffix = suffix.strip('_')
 
     begin_acquisition(duration, epoch_len, dispenser_interval, suffix)
 

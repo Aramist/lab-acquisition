@@ -17,7 +17,7 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
     while still_active():
         try:
             # Remove timeout to prevent thread from hanging after acquisition is stopped.
-            image = camera_obj.GetNextImage(0)
+            image = camera_obj.GetNextImage(34)
         except Exception:  # PySpin raises an exception when the timeout is reached, so stay silent here
             continue  # Likely hung on GetNextImage. Close thread.
         if not still_active():
