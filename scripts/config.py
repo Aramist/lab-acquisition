@@ -6,18 +6,24 @@ constants = {
 
     'num_microphones': 4,
     'data_directory': 'D:acquired_data',
+    'cam_setup_time': 15, #amount of time alloted for cameras to initialize...may need more time if you're using more cams
     'camera_a_serial': '19390113', 
     'camera_b_serial': '19413860',
+    'camera_c_serial': '21259816',
     'camera_ctr_port': '{device_name}/ctr1',
     'camera_framerate': 30,  # Hz/fps
     'cam_a_enabled': True,
     'cam_b_enabled': True,
+    'cam_c_enabled': False,
     'cam_a_display_enabled': False,
     'cam_b_display_enabled': True,
+    'cam_c_display_enabled': False,
     'cam_a_window_name': 'Camera A',
     'cam_b_window_name': 'Camera B',
+    'cam_c_window_name': 'Camera C',
     'cam_a_calibration_path': None, # for de-fisheye-ing
-    'cam_b_calibration_path': 'camera_params/cam_a', # for de-fisheye-ing
+    'cam_b_calibration_path': None, # for de-fisheye-ing
+    'cam_c_calibration_path': None,
     'cam_output_signal_ai_port': '{device_name}/ai6', #what is this for? rp 11/11/2021
 
     'microphone_sample_rate': 125000,  # Hz

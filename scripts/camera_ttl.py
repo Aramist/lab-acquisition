@@ -12,6 +12,7 @@ class CameraTTLTask:
         self.name = port_name
         self.high_time = 1/framerate * duty_cycle
         self.period_extension = period_extension
+        self.is_active = False
         self.configure_task()
 
     def configure_task(self):
@@ -27,11 +28,15 @@ class CameraTTLTask:
 
     def start(self):
         self.counter_task.start()
+        self.is_active = True
 
     def stop(self):
         self.counter_task.stop()
+        self.is_active = False
 
     def close(self):
+        if self.is_active:
+            self.stop()
         self.counter_task.close()
 
     def __enter__(self):

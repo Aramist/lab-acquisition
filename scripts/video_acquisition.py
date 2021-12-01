@@ -13,7 +13,7 @@ from scripts import camera_ttl
 from scripts.config import constants as config
     
 
-def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, maps, image_queue, save_ts_fn, counter):
+def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, maps, image_queue, counter):
     while still_active():
         try:
             # Remove timeout to prevent thread from hanging after acquisition is stopped.
@@ -23,6 +23,7 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
         if not still_active():
             return
         timestamp_arr.append((image.GetFrameID(), image.GetTimeStamp()))
+        #print((image.GetFrameID(), image.GetTimeStamp()))
         image_bgr = image.Convert(spin.PixelFormat_BGR8)
         cv_img_big = image_bgr.GetData().reshape((2 * dimensions[1], 2 * dimensions[0], 3))
         cv_img = cv2.resize(cv_img_big, dimensions)
@@ -133,7 +134,7 @@ class FLIRCamera:
         # if not path.exists(video_directory):
             # os.mkdir(video_directory)
         video_path = path.join(self.base_dir, '{}_{}.avi'.format(start_time_str, self.name))
-        writer= cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions, isColor=True)
+        writer = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'DIVX'), self.framerate, self.dimensions, isColor=True)
 
         # Reset the enforced filename field so future epochs calculate their own time
         self.enforced_filename = None
@@ -145,26 +146,26 @@ class FLIRCamera:
 
     def start_capture(self):
         self.camera.BeginAcquisition()
-        if self.camera_task is not None:
+        if (self.camera_task is not None) and not (self.camera_task.is_active):
             self.camera_task.start()
 
         # Create a function to access is_capturing, creates the effect of passing the bool by reference
         self.is_capturing = True
-        enabled = lambda: self.is_capturing and self.acq_enabled.value
+        enabled = lambda: self.is_capturing and safe_access_mp_bool(self.acq_enabled)
 
         # Begin separate thread for continued image acquisition:
         self.video_writer = self.create_video_file()
         self.timestamps = list()
         self.acq_thread = Thread(
             target=image_acquisition_loop,
-            args=(self.camera,
+            args=(
+                self.camera,
                 self.timestamps,
                 self.dimensions,
                 self.video_writer,
                 enabled,
                 self.transformation_maps,
                 self.queue,
-                self.save_ts_array,
                 self.inc_frame_count))
         self.acq_thread.start()
 
@@ -172,16 +173,20 @@ class FLIRCamera:
         try:
             self.save_ts_array()
             self.frames_acquired = 0
-            self.is_capturing = False
-            if self.camera_task is not None:
-                self.camera_task.stop()
-            self.camera.EndAcquisition()
             self.video_writer.release()
-        except Exception:
+            self.camera.EndAcquisition()
+            self.is_capturing = False
+        except Exception as e:
+            print('something wrong in end capture')
             # Things most likely released out of order
+            print(e)
             pass
 
     def release(self):
+        if self.is_capturing:
+            self.end_capture()
+        if self.camera_task is not None:
+                self.camera_task.stop()
         del self.camera
         self.spin_system.ReleaseInstance()
         if self.camera_task is not None:
@@ -197,3 +202,13 @@ class FLIRCamera:
                 self.release()
         except Exception as e:
             print(e)
+
+
+def safe_access_mp_bool(mp_bool):
+    """ Safely accesses a shared variable by catching the exception that
+    occurs when the variable ceases to exist
+    """
+    try:
+        return mp_bool.value
+    except Exception:
+        return False

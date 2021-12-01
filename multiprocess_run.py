@@ -35,18 +35,17 @@ def camera_process(acq_enabled, acq_start_time, duration, epoch_len, num_epochs,
 
     while time.time() < acq_start_time.value or not acq_enabled.value:
         pass
-    time.sleep(0.05)  # Allow the analog input enough time to start (40-50ms)
+    # time.sleep(0.05)  # Allow the analog input enough time to start (40-50ms)
     for _ in range(num_epochs):
-        start_time = time.time()
         cam.start_capture()
         try:
-            while acq_enabled.value and cam.is_capturing and time.time() - start_time < epoch_len + 2:
+            while acq_enabled.value and cam.is_capturing:  # and time.time() - start_time < epoch_len + 1:
                 pass  # Give a 2 second grace period to avoid hanging the process at the end when the ctr stops
         except Exception as e:
             print(e)
             cam.end_capture()
             return 0
-        cam.end_capture()
+    time.sleep(0.5)
     cam.release()
     return 0
 
@@ -57,14 +56,14 @@ def create_cv_windows(window_names):
 
 
 def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration, epoch_len, cam_queues, framerate=30):
-    a_enabled, b_enabled = config['cam_a_enabled'], config['cam_b_enabled']
+    a_enabled, b_enabled, c_enabled = config['cam_a_enabled'], config['cam_b_enabled'], config['cam_c_enabled']
     cam_port = config['camera_ctr_port']
     camera_params = [
         {
             'root_directory': directory,
             'acq_enabled': acq_enabled,
             'camera_serial':  config['camera_a_serial'],
-            'counter_port': cam_port if a_enabled else None,  # Ensure that the port only belongs to one camera object
+            'counter_port': cam_port,  # Ensure that the port only belongs to one camera object
             'port_name': 'cam_a',
             'frame_target': epoch_len * framerate,
             'framerate': framerate,
@@ -77,7 +76,7 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
             'root_directory': directory,
             'acq_enabled': acq_enabled,
             'camera_serial':  config['camera_b_serial'],
-            'counter_port': cam_port if not a_enabled else None,
+            'counter_port': None,
             'port_name': 'cam_b',
             'frame_target': epoch_len * framerate,
             'framerate': framerate,
@@ -86,26 +85,40 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
             'use_queue': cam_queues[1],
             'enforce_filename': filename
         },
+        {
+            'root_directory': directory,
+            'acq_enabled': acq_enabled,
+            'camera_serial':  config['camera_c_serial'],
+            'counter_port': None,
+            'port_name': 'cam_c',
+            'frame_target': epoch_len * framerate,
+            'framerate': framerate,
+            'period_extension': 0,
+            'calibration_param_path': config['cam_c_calibration_path'],
+            'use_queue': cam_queues[2],
+            'enforce_filename': filename
+        },
     ]
 
     # Filter out the disabled cameras
-    camera_params = [bound[0] for bound in zip(camera_params, (a_enabled, b_enabled)) if bound[1]]
+    camera_params = [bound[0] for bound in zip(camera_params, (a_enabled, b_enabled, c_enabled)) if bound[1]]
     if not camera_params:
         return  # In this case, both cameras are disabled
 
     # Since objects can't be transported across processes, the camera objects have to be created independently in its own process
     camera_names = [p['port_name'] for p in camera_params]
     num_epochs = ceil(duration / epoch_len)
-    with Pool(processes=2) as pool:
-        print('initializing cameras: {}'.format(str(camera_names)))
-        try:
-            pool.map(partial(camera_process, acq_enabled, acq_start_time, duration, epoch_len, num_epochs), camera_params)
-        except KeyboardInterrupt:
-            pass
-        except Exception:
-            pass
-        print('Closing camera processes')
-        pool.terminate()
+    
+    print('initializing cameras: {}'.format(str(camera_names)))
+    camera_processes = list()
+    for camera_configuration in camera_params:
+        camera_proc = Process(
+            target=camera_process,
+            args=(acq_enabled, acq_start_time, duration, epoch_len, num_epochs, camera_configuration))
+        camera_proc.daemon = True
+        camera_processes.append(camera_proc)
+        camera_proc.start()
+    return camera_processes
 
 
 def calc_spec_frame_segment_mono(all_audio):
@@ -214,9 +227,10 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
     spectrogram_colored = False
     device_name = config['device_name']
     # First make the directory to hold all the data
-    start_time_dt = datetime.datetime.now() + datetime.timedelta(seconds=6)
+    secs = config['cam_setup_time']
+    start_time_dt = datetime.datetime.now() + datetime.timedelta(seconds=secs)
     # n seconds between running multiprocess_run and acquisition starting. Gives everything time to setup
-    print('Acquisition beginning in 6 seconds.')
+    print('Acquisition beginning in {} seconds.'.format(secs))
     script_start_time = start_time_dt.strftime('%Y_%m_%d_%H_%M_%S_%f')
     if suffix is not None:
         folder_name = '{}_{}'.format(script_start_time, suffix)
@@ -233,6 +247,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         feeder_proc.start()
 
     with multiprocessing.Manager() as manager:
+        
         acq_started = manager.Value(c_bool, False)
         acq_start_time = manager.Value(c_double, start_time_dt.timestamp())
 
@@ -242,9 +257,11 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
         # cam_queue = None
         cam_a_queue = manager.Queue() if config['cam_a_enabled'] and config['cam_a_display_enabled'] else None
         cam_b_queue = manager.Queue() if config['cam_b_enabled'] and config['cam_b_display_enabled'] else None
+        cam_c_queue = manager.Queue() if config['cam_c_enabled'] and config['cam_c_display_enabled'] else None
         window_names = {
             'a': config['cam_a_window_name'],
             'b': config['cam_b_window_name'],
+            'c': config['cam_c_window_name'],
             'mic': config['spectrogram_window_name']
         }
 
@@ -253,22 +270,24 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
             del window_names['a']
         if not config['cam_b_display_enabled']:
             del window_names['b']
+        if not config['cam_c_display_enabled']:
+            del window_names['c']
         if not config['spectrogram_display_enabled']:
             del window_names['mic']
 
         create_cv_windows(window_names.values())
         
-        cam_thread = threading.Thread(
-            target=multi_epoch_demo,
-            args=(subdir,
-                script_start_time,
-                acq_started,
-                acq_start_time,
-                duration,
-                epoch_len,
-                (cam_a_queue, cam_b_queue),
-                config['camera_framerate']))
-        cam_thread.start()
+        # Starts the camera child-processes
+        camera_processes = multi_epoch_demo(
+            subdir,
+            script_start_time,
+            acq_started,
+            acq_start_time,
+            duration,
+            epoch_len,
+            (cam_a_queue, cam_b_queue, cam_c_queue),
+            config['camera_framerate'])
+        
 
         ai_ports = [u'{}/ai{}'.format(device_name, i) for i in range(NUM_MICROPHONES)]
         ai_names = [u'microphone_{}'.format(a) for a in range(NUM_MICROPHONES)]
@@ -286,6 +305,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                     config['audio_ttl_ai_port'],
                     config['cam_output_signal_ai_port'],
                     config['wm_trig_ai_port']))
+        mic_proc.daemon = True
         mic_proc.start()
 
         if send_sync:
@@ -314,7 +334,7 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
 
         while time.time() < start_time_dt.timestamp():
             pass
-
+        print('Beginning acquisition.')
         start = time.time()
         last_printed = 0
         try:
@@ -347,6 +367,15 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
                     try:
                         image = cam_b_queue.get(timeout=0)
                         cv2.imshow(window_names['b'], image)
+                        cv2.waitKey(1)
+                    except Empty:
+                        pass
+                    except Exception as e:
+                        print(e)
+                if cam_c_queue is not None:
+                    try:
+                        image = cam_c_queue.get(timeout=0)
+                        cv2.imshow(window_names['c'], image)
                         cv2.waitKey(1)
                     except Empty:
                         pass
@@ -407,11 +436,17 @@ def begin_acquisition(duration, epoch_len, dispenser_interval=None, suffix=None,
             acq_started.value = False
         except Exception:
             pass
+    # Shutdown procedure:
+    # Get rid of any cv windows
     cv2.destroyAllWindows()
     cv2.waitKey(1)
+    # Wait for all processes to complete
     mic_proc.join()
+    for cam_proc in camera_processes:
+        cam_proc.join()
     if dispenser_interval is not None:
         feeder_proc.join()
+    # Stop the sync signal
     if send_sync:
         co_task.stop()
         co_task.close()
