@@ -13,7 +13,7 @@ from scripts import camera_ttl
 from scripts.config import constants as config
     
 
-def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, still_active, maps, image_queue, counter):
+def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, write_frame, still_active, maps, image_queue, counter):
     while still_active():
         try:
             # Remove timeout to prevent thread from hanging after acquisition is stopped.
@@ -33,7 +33,7 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
             # Here 0.5 is the alpha parameter, which determines how many of the original pixels should be kept in the image
         if image_queue is not None:
             image_queue.put(cv_img)
-        video_writer.write(cv_img)
+        write_frame(cv_img)
         # del cv_img
         del cv_img_big
         try:
@@ -45,12 +45,13 @@ def image_acquisition_loop(camera_obj, timestamp_arr, dimensions, video_writer, 
 
 
 class FLIRCamera:
-    def __init__(self, root_directory, acq_enabled, camera_serial, counter_port, port_name, frame_target, framerate=config['camera_framerate'], period_extension=0, dimensions=(640,512), calibration_param_path=None, use_queue=None, enforce_filename=None):
+    def __init__(self, root_directory, acq_enabled, camera_serial, counter_port, port_name, frame_target, epoch_target, framerate=config['camera_framerate'], period_extension=0, dimensions=(640,512), calibration_param_path=None, use_queue=None, enforce_filename=None):
         self.framerate = framerate
         self.serial = camera_serial
         self.dimensions = dimensions
         self.base_dir = root_directory
         self.acq_enabled = acq_enabled
+        self.is_capturing = False
 
         self.port = counter_port
         self.name = port_name
@@ -60,6 +61,9 @@ class FLIRCamera:
 
         self.frame_target = frame_target
         self.frames_acquired = 0
+
+        self.epoch_target = epoch_target
+        self.epochs_acquired = 0
 
         self.queue = use_queue
         self.enforced_filename = enforce_filename
@@ -119,7 +123,8 @@ class FLIRCamera:
     def inc_frame_count(self):
         self.frames_acquired += 1
         if self.frames_acquired >= self.frame_target:
-            self.end_capture()
+            self.end_epoch()
+            self.start_epoch()
 
     def create_video_file(self):
         start_time = datetime.datetime.now()
@@ -141,20 +146,35 @@ class FLIRCamera:
         return writer
 
     def save_ts_array(self):
+        # The length here is arbitrary. Just to make sure we don't overwrite an existing npy file
+        # with nearly empty data
+        if len(self.timestamps) < 30 * 50:
+            return
         np.save(self.timestamp_path, np.array(self.timestamps))
         self.timestamps.clear()
 
-    def start_capture(self):
+    def start_epoch(self):
+        if self.epochs_acquired >= self.epoch_target:
+            return
+
+        self.video_writer = self.create_video_file()
+
+        if self.is_capturing:
+            # Testing out the effect of leaving everything active for the entire runtime
+            # and only changing the file being written to upon entering new epochs
+            return
+        
         self.camera.BeginAcquisition()
+        self.is_capturing = True
         if (self.camera_task is not None) and not (self.camera_task.is_active):
             self.camera_task.start()
 
         # Create a function to access is_capturing, creates the effect of passing the bool by reference
-        self.is_capturing = True
         enabled = lambda: self.is_capturing and safe_access_mp_bool(self.acq_enabled)
 
         # Begin separate thread for continued image acquisition:
-        self.video_writer = self.create_video_file()
+        # 2021-12-03: replacing video writer object in args with function to write frame
+        # this allows us to keep one thread alive for the whole 
         self.timestamps = list()
         self.acq_thread = Thread(
             target=image_acquisition_loop,
@@ -162,29 +182,33 @@ class FLIRCamera:
                 self.camera,
                 self.timestamps,
                 self.dimensions,
-                self.video_writer,
+                self.write_frame,
                 enabled,
                 self.transformation_maps,
                 self.queue,
                 self.inc_frame_count))
         self.acq_thread.start()
 
-    def end_capture(self):
+    def write_frame(self, frame):
+        self.video_writer.write(frame)
+
+    def end_epoch(self):
         try:
             self.save_ts_array()
+            self.epochs_acquired += 1
             self.frames_acquired = 0
             self.video_writer.release()
-            self.camera.EndAcquisition()
-            self.is_capturing = False
         except Exception as e:
-            print('something wrong in end capture')
+            print('something wrong in end epoch')
             # Things most likely released out of order
             print(e)
             pass
 
     def release(self):
+        self.end_epoch()
         if self.is_capturing:
-            self.end_capture()
+            self.camera.EndAcquisition()
+            self.is_capturing = False
         if self.camera_task is not None:
                 self.camera_task.stop()
         del self.camera

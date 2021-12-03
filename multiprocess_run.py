@@ -36,15 +36,14 @@ def camera_process(acq_enabled, acq_start_time, duration, epoch_len, num_epochs,
     while time.time() < acq_start_time.value or not acq_enabled.value:
         pass
     # time.sleep(0.05)  # Allow the analog input enough time to start (40-50ms)
-    for _ in range(num_epochs):
-        cam.start_capture()
-        try:
-            while acq_enabled.value and cam.is_capturing:  # and time.time() - start_time < epoch_len + 1:
-                pass  # Give a 2 second grace period to avoid hanging the process at the end when the ctr stops
-        except Exception as e:
-            print(e)
-            cam.end_capture()
-            return 0
+    cam.start_epoch()
+    try:
+        while acq_enabled.value and cam.is_capturing:  # and time.time() - start_time < epoch_len + 1:
+            pass  # Give a 2 second grace period to avoid hanging the process at the end when the ctr stops
+    except Exception as e:
+        print(e)
+        cam.end_epoch()
+        return 0
     time.sleep(0.5)
     cam.release()
     return 0
@@ -58,6 +57,7 @@ def create_cv_windows(window_names):
 def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration, epoch_len, cam_queues, framerate=30):
     a_enabled, b_enabled, c_enabled = config['cam_a_enabled'], config['cam_b_enabled'], config['cam_c_enabled']
     cam_port = config['camera_ctr_port']
+    num_epochs = ceil(duration / epoch_len)
     camera_params = [
         {
             'root_directory': directory,
@@ -66,6 +66,7 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
             'counter_port': cam_port,  # Ensure that the port only belongs to one camera object
             'port_name': 'cam_a',
             'frame_target': epoch_len * framerate,
+            'epoch_target': num_epochs,
             'framerate': framerate,
             'period_extension': 0,
             'calibration_param_path': config['cam_a_calibration_path'],
@@ -79,6 +80,7 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
             'counter_port': None,
             'port_name': 'cam_b',
             'frame_target': epoch_len * framerate,
+            'epoch_target': num_epochs,
             'framerate': framerate,
             'period_extension': 0,
             'calibration_param_path': config['cam_b_calibration_path'],
@@ -92,6 +94,7 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
             'counter_port': None,
             'port_name': 'cam_c',
             'frame_target': epoch_len * framerate,
+            'epoch_target': num_epochs,
             'framerate': framerate,
             'period_extension': 0,
             'calibration_param_path': config['cam_c_calibration_path'],
@@ -107,7 +110,6 @@ def multi_epoch_demo(directory, filename, acq_enabled, acq_start_time, duration,
 
     # Since objects can't be transported across processes, the camera objects have to be created independently in its own process
     camera_names = [p['port_name'] for p in camera_params]
-    num_epochs = ceil(duration / epoch_len)
     
     print('initializing cameras: {}'.format(str(camera_names)))
     camera_processes = list()
