@@ -127,3 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+calibration/
+acquired_data/
+camera_params/
+
